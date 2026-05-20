@@ -1,0 +1,42 @@
+# Build directories
+build/
+build_fuzz/
+build_analyze/
+bin/
+
+# Version control
+.git/
+.gitignore
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Test artifacts and audio files
+*.l16
+*.mulaw
+*.alaw
+*.opus
+*.raw
+assets/
+
+# Documentation
+docs/
+*.md
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.out
+
+# CI/CD
+scripts/
+
+# Environments
+.env
+
+test-*.sh

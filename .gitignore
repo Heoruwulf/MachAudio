@@ -1,55 +1,51 @@
-# Prerequisites
-*.d
+# CMake build directories
+build/
+build-*/
+build_*/
+out/
+out-*/
 
-# Object files
+# Object files and libraries
 *.o
-*.ko
-*.obj
-*.elf
-
-# Linker output
-*.ilk
-*.map
-*.exp
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Libraries
-*.lib
 *.a
-*.la
-*.lo
-
-# Shared objects (inc. Windows DLLs)
-*.dll
 *.so
-*.so.*
 *.dylib
+*.dll
 
 # Executables
 *.exe
 *.out
 *.app
-*.i*86
-*.x86_64
-*.hex
+bin/machaudio
+bin/unit_tests
 
-# Debug files
-*.dSYM/
-*.su
-*.idb
-*.pdb
+# Compile commands database for clang-tidy/clangd
+compile_commands.json
 
-# Kernel Module Compile Results
-*.mod*
-*.cmd
-.tmp_versions/
-modules.order
-Module.symvers
-Mkfile.old
-dkms.conf
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
-# debug information files
-*.dwo
+# Test results
+Testing/
+*.gcda
+*.gcno
+*.gcov
+coverage.info
+coverage/
+
+*.wav
+*.mulaw
+*.alaw
+*.l16
+*.opus
+*.ogg
+*.flac
+*.mp3
+assets/
+
+test-*.sh
