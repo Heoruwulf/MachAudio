@@ -29,6 +29,9 @@ compile_commands.json
 *.swo
 *~
 .DS_Store
+.antigravity*.md
+.antigravitycli/
+*-plan.md
 
 # Test results
 Testing/

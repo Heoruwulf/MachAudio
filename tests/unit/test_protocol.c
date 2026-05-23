@@ -66,14 +66,14 @@ void test_audio_output_payload_structure(void) {
     TEST_ASSERT_EQUAL_UINT(16, sizeof(struct audio_start_payload));
     TEST_ASSERT_EQUAL_UINT(0, offsetof(struct audio_start_payload, in_payload_type));
     TEST_ASSERT_EQUAL_UINT(4, offsetof(struct audio_start_payload, in_sample_rate));
-    TEST_ASSERT_EQUAL_UINT(8, offsetof(struct audio_start_payload, out_payload_type));
+    TEST_ASSERT_EQUAL_UINT(9, offsetof(struct audio_start_payload, out_payload_type));
     TEST_ASSERT_EQUAL_UINT(12, offsetof(struct audio_start_payload, out_sample_rate));
 
     // audio_output_payload alignment
     struct audio_output_payload payload;
     TEST_ASSERT_EQUAL_UINT(8, sizeof(payload.duration_ns));
     size_t offset_data = (uint8_t *)&payload.data - (uint8_t *)&payload.duration_ns;
-    TEST_ASSERT_EQUAL_UINT(8, offset_data);
+    TEST_ASSERT_EQUAL_UINT(16, offset_data);
 
     // audio_discover_reply_payload alignment
     TEST_ASSERT_EQUAL_UINT(8, sizeof(struct audio_discover_reply_payload));

@@ -44,6 +44,7 @@ typedef struct {
     uint32_t    ptime;
     bool        loop;
     uint32_t    duration_sec;
+    bool        vad_enabled;
 } ClientConfig;
 
 typedef struct {
@@ -124,6 +125,7 @@ static void print_usage(char const *prog) {
     printf("  -p, --ptime <ms>          Packet time in ms (default: %d)\n", DEFAULT_PTIME_MS);
     printf("  -l, --loop                Loop the input file\n");
     printf("  -d, --duration <sec>      Total test duration when looping\n");
+    printf("  -V, --vad                 Enable VAD processing\n");
     printf("  -h, --help                Show this help\n");
 }
 
@@ -148,6 +150,7 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
         {"ptime", required_argument, 0, 'p'},
         {"loop", no_argument, 0, 'l'},
         {"duration", required_argument, 0, 'd'},
+        {"vad", no_argument, 0, 'V'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}};
 
@@ -165,13 +168,14 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
     config->out_endian   = 1;
     config->concurrent   = DEFAULT_CONCURRENT;
     config->ptime        = DEFAULT_PTIME_MS;
+    config->vad_enabled  = false;
 
     int opt;
     int option_index = 0;
     while ((opt = getopt_long(
                 argc,
                 argv,
-                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:h",
+                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:hV",
                 long_options,
                 &option_index)) != -1)
     {
@@ -232,6 +236,9 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
             break;
         case 'd':
             config->duration_sec = (uint32_t)atoi(optarg);
+            break;
+        case 'V':
+            config->vad_enabled = true;
             break;
         case 'h':
         default:
@@ -381,8 +388,19 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
                     (struct audio_output_payload *)(ptr + sizeof(AudioMsgHeader));
                 uint64_t const duration_ns = be64toh(payload->duration_ns);
 
+                uint32_t prob_net_bits;
+                memcpy(&prob_net_bits, &payload->vad_prob, sizeof(uint32_t));
+                float const vad_prob = protocol_net_to_float(prob_net_bits);
+
+                if (g_app.config.vad_enabled) {
+                    LOGINF(
+                        "Connection %u received chunk with VAD probability: %.6f",
+                        conn->id,
+                        vad_prob);
+                }
+
                 conn->count_received++;
-                conn->total_received += header.payload_len - sizeof(uint64_t);
+                conn->total_received += header.payload_len - sizeof(struct audio_output_payload);
                 conn->sum_duration_ns += duration_ns;
 
                 if (duration_ns < conn->min_duration_ns) {
@@ -412,7 +430,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
                     fwrite(
                         payload->data,
                         1,
-                        header.payload_len - sizeof(uint64_t),
+                        header.payload_len - sizeof(struct audio_output_payload),
                         conn->output_file);
                 }
             }
@@ -583,6 +601,7 @@ static void on_connect(uv_connect_t *req, int status) {
         (struct audio_start_payload *)(buf + sizeof(AudioMsgHeader));
     payload->in_payload_type = g_app.config.format;
     payload->in_channels     = g_app.config.channels;
+    payload->flags           = htons(g_app.config.vad_enabled ? AUDIO_START_FLAGS_VAD_ENABLED : 0);
     payload->in_endian       = g_app.config.in_endian;
     payload->in_sample_rate  = htonl(g_app.config.rate);
 

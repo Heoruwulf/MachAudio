@@ -5,6 +5,7 @@ add_executable(unit_tests
     test_transcode.c
     test_resample_adv.c
     test_mix.c
+    test_vad_gru.c
 )
 
 target_link_libraries(unit_tests PRIVATE 

@@ -101,6 +101,15 @@ static void on_read(uv_stream_t *client, ssize_t nread, uv_buf_t const *buf) {
                 &session->audio_engine,
                 (int)ntohl(config->in_sample_rate),
                 (int)config->in_channels);
+
+            if (session->transcode_session.vad_enabled) {
+                arena_reset(&session->arena);
+                session->transcode_session.vad_state = vad_gru_init(&session->arena);
+                session->arena_curr_start            = session->arena.curr;
+            } else {
+                arena_reset(&session->arena);
+                session->arena_curr_start = 0;
+            }
             break;
         }
 
@@ -110,7 +119,7 @@ static void on_read(uv_stream_t *client, ssize_t nread, uv_buf_t const *buf) {
                 break;
             }
 
-            arena_reset(&session->arena);
+            session->arena.curr     = session->arena_curr_start;
             uint64_t const start_ns = uv_hrtime();
 
             int r = audio_process_transcode(
@@ -123,8 +132,8 @@ static void on_read(uv_stream_t *client, ssize_t nread, uv_buf_t const *buf) {
             uint64_t const duration_ns = end_ns - start_ns;
 
             if (r == 0) {
-                size_t const out_data_len = arena_used(&session->arena);
-                size_t const payload_len  = sizeof(uint64_t) + out_data_len;
+                size_t const out_data_len = arena_used(&session->arena) - session->arena_curr_start;
+                size_t const payload_len  = sizeof(struct audio_output_payload) + out_data_len;
                 size_t const resp_len     = sizeof(AudioMsgHeader) + payload_len;
 
                 uint8_t *const resp_buf = malloc(resp_len);
@@ -141,7 +150,16 @@ static void on_read(uv_stream_t *client, ssize_t nread, uv_buf_t const *buf) {
                 struct audio_output_payload *const resp_payload =
                     (struct audio_output_payload *)(resp_buf + sizeof(AudioMsgHeader));
                 resp_payload->duration_ns = htobe64(duration_ns);
-                memcpy(resp_payload->data, session->arena.buf, out_data_len);
+
+                uint32_t const prob_net =
+                    protocol_float_to_net(session->transcode_session.last_vad_prob);
+                memcpy(&resp_payload->vad_prob, &prob_net, sizeof(float));
+
+                memset(resp_payload->reserved, 0, sizeof(resp_payload->reserved));
+                memcpy(
+                    resp_payload->data,
+                    session->arena.buf + session->arena_curr_start,
+                    out_data_len);
 
                 uv_write_t *const write_req = malloc(sizeof(uv_write_t));
                 if (write_req == NULL) {
@@ -152,7 +170,7 @@ static void on_read(uv_stream_t *client, ssize_t nread, uv_buf_t const *buf) {
                 uv_buf_t const uv_resp = uv_buf_init((char *)resp_buf, (unsigned int)resp_len);
                 uv_write(write_req, client, &uv_resp, 1, on_write);
 
-                arena_reset(&session->arena);
+                session->arena.curr = session->arena_curr_start;
             } else {
                 LOGERR("Transcode processing failed");
                 send_error(client, decoded.sequence_id, ERR_PROCESSING_FAILED);
@@ -257,7 +275,7 @@ static void on_new_connection(uv_stream_t *server_stream, int status) {
 
     uv_stream_t *const client_stream = (uv_stream_t *)&session->handle;
     client_stream->data              = session;
-    arena_init(&session->arena, session->arena_buf, sizeof(session->arena_buf));
+    arena_init(&session->arena, session->arena_buf, sizeof(session->arena_buf), "session");
 
     if (uv_accept(server_stream, client_stream) == 0) {
         LOGINF("New client connected");

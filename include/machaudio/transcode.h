@@ -3,6 +3,7 @@
 
 #include "machaudio/arena.h"
 #include "machaudio/protocol.h"
+#include "machaudio/vad_gru.h"
 
 #include <opus/opus.h>
 #include <stdbool.h>
@@ -50,6 +51,11 @@ typedef struct {
     bool needs_resample;
 
     Resampler resampler;
+
+    // Voice Activity Detection (VAD) state
+    VadGruState *vad_state;
+    bool         vad_enabled;
+    float        last_vad_prob;
 } TranscodeSession;
 
 /**

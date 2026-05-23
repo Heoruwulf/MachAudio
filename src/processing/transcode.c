@@ -28,6 +28,10 @@ int transcode_session_init(
     session->out_endian       = config->out_endian;
     session->out_sample_rate  = ntohl(config->out_sample_rate);
 
+    session->vad_enabled   = (ntohs(config->flags) & AUDIO_START_FLAGS_VAD_ENABLED) != 0;
+    session->vad_state     = NULL;
+    session->last_vad_prob = session->vad_enabled ? 0.0f : -1.0f;
+
     bool const host_le = is_host_little_endian();
 
     // Determine if we need to swap input L16
@@ -195,6 +199,19 @@ int audio_process_transcode(
         return -1;
     }
 
+    // Run VAD on the combined mixed input stream if VAD is enabled and the input is L16 16kHz
+    session->last_vad_prob = -1.0f;
+    if (session->vad_enabled && session->vad_state != NULL &&
+        session->in_sample_rate == VAD_SAMPLE_RATE)
+    {
+        session->last_vad_prob = vad_gru_process_pcm(
+            session->vad_state,
+            l16_buf,
+            l16_samples,
+            VAD_SAMPLE_RATE,
+            (int)session->in_channels);
+    }
+
     // 2. Resample (if needed)
     int16_t *resampled_buf     = l16_buf;
     size_t   resampled_samples = l16_samples;
@@ -207,6 +224,19 @@ int audio_process_transcode(
             return -1;
         resampled_samples =
             resample_l16_advanced(session, l16_buf, l16_samples, resampled_buf, out_cap);
+    }
+
+    // Run VAD on the resampled stream if VAD is enabled, output is 16kHz, and we haven't run VAD
+    // yet
+    if (session->vad_enabled && session->vad_state != NULL && session->last_vad_prob == -1.0f &&
+        session->out_sample_rate == VAD_SAMPLE_RATE)
+    {
+        session->last_vad_prob = vad_gru_process_pcm(
+            session->vad_state,
+            resampled_buf,
+            resampled_samples,
+            VAD_SAMPLE_RATE,
+            (int)session->out_channels);
     }
 
     // 3. Encode / Prepare Output

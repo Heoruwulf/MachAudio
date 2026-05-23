@@ -19,6 +19,7 @@ The service communicates over Unix Domain Sockets (UDS) and TCP/IP using a custo
   * **Opus:** Integration with `libopus` for high-quality, low-latency VoIP encoding and decoding.
   * **L16:** Raw 16-bit PCM with automatic endianness swapping based on host and protocol specifications.
 * **Dynamic Resampling:** High-quality sample rate conversion (e.g., 8kHz to 48kHz) using SIMD-accelerated polyphase FIR filters.
+* **Voice Activity Detection (VAD):** Integrated zero-allocation, real-time Voice Activity Detection using a Micro-GRU neural network architecture, accelerated with AVX2/FMA intrinsics. Returns real-time speech probability (0.0f to 1.0f) packaged directly in output frames.
 * **Asynchronous I/O:** Event-driven architecture utilizing a dedicated `libuv` reactor loop per worker process.
 
 ## ⚡ Performance & Capacity Projections
@@ -38,6 +39,15 @@ MachAudio is designed for ultra-low latency. Below are empirical benchmark resul
 * **Average Latency:** 0.267 ms per buffer
 * **P95 Latency:** 0.306 ms
 * **Max Latency:** 0.328 ms
+
+**Test Scenario 3: Real-Time Transcoding & Voice Activity Detection (8kHz PCMU -> 16kHz L16 Mono, ptime 20ms, VAD enabled)**
+
+* Running single worker daemon on logical CPU core 7 elevated to real-time priority (`SCHED_FIFO` 69).
+* Processing 120 seconds of multi-channel audio data under high load (5,981 frames processed).
+* **Average Latency:** 0.364 ms per buffer
+* **P95 Latency:** 0.411 ms
+* **Min Latency:** 0.298 ms
+* **Max Latency:** 0.760 ms
 
 ### Capacity Projections (Per Core)
 
