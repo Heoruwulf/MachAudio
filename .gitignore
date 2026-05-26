@@ -32,6 +32,7 @@ compile_commands.json
 .antigravity*.md
 .antigravitycli/
 *-plan.md
+*.html
 
 # Test results
 Testing/
@@ -49,6 +50,8 @@ coverage/
 *.ogg
 *.flac
 *.mp3
+*.vad
 assets/
 
 test-*.sh
+test*.svg

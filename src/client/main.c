@@ -59,6 +59,7 @@ typedef struct {
     size_t     offset_2;
     uint32_t   sequence_id;
     FILE      *output_file;
+    FILE      *output_vad_file;
 
     // Statistics
     uint64_t  total_sent;
@@ -433,6 +434,10 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
                         header.payload_len - sizeof(struct audio_output_payload),
                         conn->output_file);
                 }
+
+                if (conn->output_vad_file) {
+                    fwrite(&vad_prob, sizeof(float), 1, conn->output_vad_file);
+                }
             }
 
             size_t msg_total = sizeof(AudioMsgHeader) + header.payload_len;
@@ -759,9 +764,17 @@ int main(int argc, char **argv) {
                 timestamp_str,
                 i,
                 get_codec_extension(g_app.config.out_format));
+
             conn->output_file = fopen(filename, "wb");
             if (!conn->output_file) {
-                LOGERR("Failed to open output file: %s", filename);
+                LOGERR("Failed to open output audio file: %s", filename);
+            }
+
+            snprintf(filename, sizeof(filename), "output_%s.vad", timestamp_str);
+
+            conn->output_vad_file = fopen(filename, "wb");
+            if (!conn->output_vad_file) {
+                LOGERR("Failed to open output vad file: %s", filename);
             }
         }
 
@@ -841,6 +854,10 @@ int main(int argc, char **argv) {
 
         if (conn->output_file) {
             fclose(conn->output_file);
+        }
+
+        if (conn->output_vad_file) {
+            fclose(conn->output_vad_file);
         }
 
         free(conn->latencies);

@@ -118,6 +118,8 @@ int audio_process_transcode(
     struct audio_input_payload const *const payload,
     size_t const                            payload_len,
     Arena *const                            out_arena) {
+
+    size_t const initial_curr = out_arena->curr;
     if (unlikely(session == NULL || payload == NULL || out_arena == NULL)) {
         return -1;
     }
@@ -248,31 +250,31 @@ int audio_process_transcode(
             transcode_l16_to_opus(session, resampled_buf, resampled_samples, opus_out, 4000);
         if (encoded_bytes < 0)
             return -1;
-        memmove(out_arena->buf, opus_out, (size_t)encoded_bytes);
-        out_arena->curr = (size_t)encoded_bytes;
+        memmove((uint8_t *)out_arena->buf + initial_curr, opus_out, (size_t)encoded_bytes);
+        out_arena->curr = initial_curr + (size_t)encoded_bytes;
     } else if (session->out_payload_type == CODEC_PCMU) {
         size_t const   out_len  = resampled_samples;
         uint8_t *const pcmu_out = arena_alloc(out_arena, out_len);
         if (!pcmu_out)
             return -1;
         transcode_l16_to_pcmu(session, resampled_buf, resampled_samples, pcmu_out);
-        memmove(out_arena->buf, pcmu_out, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, pcmu_out, out_len);
+        out_arena->curr = initial_curr + out_len;
     } else if (session->out_payload_type == CODEC_PCMA) {
         size_t const   out_len  = resampled_samples;
         uint8_t *const pcma_out = arena_alloc(out_arena, out_len);
         if (!pcma_out)
             return -1;
         transcode_l16_to_pcma(session, resampled_buf, resampled_samples, pcma_out);
-        memmove(out_arena->buf, pcma_out, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, pcma_out, out_len);
+        out_arena->curr = initial_curr + out_len;
     } else if (session->out_payload_type == CODEC_L16) {
         size_t const out_len = resampled_samples * session->out_channels * sizeof(int16_t);
         if (session->swap_out) {
             swap_endian_l16(resampled_buf, resampled_samples * session->out_channels);
         }
-        memmove(out_arena->buf, resampled_buf, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, resampled_buf, out_len);
+        out_arena->curr = initial_curr + out_len;
     }
 
     return 0;

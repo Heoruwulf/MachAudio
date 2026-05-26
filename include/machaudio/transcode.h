@@ -27,7 +27,7 @@ typedef struct {
     int16_t const *coeffs;
     int            taps;
     int            phases;
-    uint64_t       pos_fp; // 32.32 fixed point
+    int64_t        pos_fp; // 32.32 fixed point
     int16_t        delay_buf[RESAMPLER_MAX_TAPS];
 } Resampler;
 
