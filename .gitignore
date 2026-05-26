@@ -29,6 +29,10 @@ compile_commands.json
 *.swo
 *~
 .DS_Store
+.antigravity*.md
+.antigravitycli/
+*-plan.md
+*.html
 
 # Test results
 Testing/
@@ -46,6 +50,8 @@ coverage/
 *.ogg
 *.flac
 *.mp3
+*.vad
 assets/
 
 test-*.sh
+test*.svg

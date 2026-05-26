@@ -39,6 +39,13 @@ extern void test_mix_positive_saturation(void);
 extern void test_mix_negative_saturation(void);
 extern void test_mix_tail_processing(void);
 
+extern void test_vad_gru_alignment_and_alloc(void);
+extern void test_vad_gru_reset(void);
+extern void test_vad_gru_c_vs_avx2_bit_exactness(void);
+extern void test_vad_gru_functional_accuracy(void);
+extern void test_vad_gru_process_pcm_silence(void);
+extern void test_vad_gru_process_pcm_sine(void);
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -82,6 +89,13 @@ int main(void) {
     RUN_TEST(test_mix_positive_saturation);
     RUN_TEST(test_mix_negative_saturation);
     RUN_TEST(test_mix_tail_processing);
+
+    RUN_TEST(test_vad_gru_alignment_and_alloc);
+    RUN_TEST(test_vad_gru_reset);
+    RUN_TEST(test_vad_gru_c_vs_avx2_bit_exactness);
+    RUN_TEST(test_vad_gru_functional_accuracy);
+    RUN_TEST(test_vad_gru_process_pcm_silence);
+    RUN_TEST(test_vad_gru_process_pcm_sine);
 
     return UNITY_END();
 }

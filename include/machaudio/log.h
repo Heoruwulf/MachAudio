@@ -49,10 +49,10 @@ static inline char const *log_get_signal_name(int signum) {
         fflush(stderr);                                                                            \
     } while (0)
 
-#ifdef DEBUG
+#if defined(DEBUG) || defined(DEBUGLOGS)
 #define LOGDBG(...)                                                                                \
     do {                                                                                           \
-        fprintf(stdout, "[DBUG] [%s:%d] ", __FILE__, __LINE__);                                    \
+        fprintf(stdout, "[DBUG]\t[%s:%d] ", __FILE__, __LINE__);                                   \
         fprintf(stdout, __VA_ARGS__);                                                              \
         fprintf(stdout, "\n");                                                                     \
         fflush(stdout);                                                                            \

@@ -34,6 +34,7 @@ typedef struct {
     TranscodeSession transcode_session;
     uint8_t          arena_buf[MACH_SESSION_ARENA_SIZE];
     uint8_t          read_buf[MACH_SESSION_ARENA_SIZE];
+    size_t           arena_curr_start;
     bool             is_tcp;
     MachServer      *server;
 } MachSession;

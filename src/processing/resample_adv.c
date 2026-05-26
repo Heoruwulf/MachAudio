@@ -9,6 +9,15 @@
  * Advanced Resampler Implementation (Windowed-Sinc)
  */
 
+static inline int16_t clamp_to_int16(double val) {
+    double r = round(val);
+    if (r > 32767.0)
+        return 32767;
+    if (r < -32768.0)
+        return -32768;
+    return (int16_t)r;
+}
+
 #ifdef __AVX2__
 /**
  * Vector MAC for 128 taps using AVX2.
@@ -52,9 +61,9 @@ static inline void mac_downsample_avx2(
     int16_t const *restrict const in_data,
     size_t const in_samples,
     int16_t *restrict const out_data,
-    size_t const   count,
-    double const   ratio,
-    uint64_t const step_fp) {
+    size_t const  count,
+    double const  ratio,
+    int64_t const step_fp) {
 
     double const inv_s      = ratio;
     double const s          = 1.0 / ratio;
@@ -72,9 +81,9 @@ static inline void mac_downsample_avx2(
     int16_t const *const base_ptr = &SINC_COEFFS[0][0];
 
     for (size_t i = 0; i < count; ++i) {
-        uint64_t const pos_fp = r->pos_fp;
-        double const   t0 = (double)(pos_fp >> 32) + (double)(pos_fp & 0xFFFFFFFF) / 4294967296.0;
-        __m256 const   v_t =
+        int64_t const pos_fp = r->pos_fp;
+        double const  t0 = (double)(pos_fp >> 32) + (double)(pos_fp & 0xFFFFFFFF) / 4294967296.0;
+        __m256 const  v_t =
             _mm256_add_ps(_mm256_set1_ps((float)t0), _mm256_mul_ps(v_offsets, v_step));
 
         double const t7        = t0 + 7.0 * step;
@@ -140,12 +149,10 @@ static inline void mac_downsample_avx2(
         __m256i const v_out32 = _mm256_cvtps_epi32(
             _mm256_round_ps(v_acc, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
 
-        // Extract 8 int32 and store as 8 int16
-        int32_t temp[8];
-        _mm256_storeu_si256((__m256i *)temp, v_out32);
-        for (int n = 0; n < 8; ++n) {
-            out_data[i * 8 + n] = (int16_t)temp[n];
-        }
+        // Extract 8 int32, pack with saturation to int16, and store
+        __m256i const v_packed   = _mm256_packs_epi32(v_out32, v_out32);
+        __m256i const v_permuted = _mm256_permute4x64_epi64(v_packed, _MM_SHUFFLE(3, 2, 2, 0));
+        _mm_storeu_si128((__m128i *)&out_data[i * 8], _mm256_castsi256_si128(v_permuted));
 
         r->pos_fp += 8 * step_fp;
     }
@@ -169,9 +176,9 @@ size_t resample_l16_advanced(
         return samples;
     }
 
-    double const   ratio   = (double)out_rate / (double)in_rate;
-    double const   step    = 1.0 / ratio;
-    uint64_t const step_fp = (uint64_t)(step * (double)(1ULL << 32));
+    double const  ratio   = (double)out_rate / (double)in_rate;
+    double const  step    = 1.0 / ratio;
+    int64_t const step_fp = (int64_t)(step * (double)(1ULL << 32));
 
     size_t const out_samples = (size_t)((double)in_samples * ratio);
     if (unlikely(out_samples > out_capacity))
@@ -184,9 +191,9 @@ size_t resample_l16_advanced(
     double const inv_s = 1.0 / s;
 
     for (size_t i = 0; i < out_samples; ++i) {
-        uint64_t const pos_fp = r->pos_fp;
-        size_t         idx    = (size_t)(pos_fp >> 32);
-        double         frac   = (double)(pos_fp & 0xFFFFFFFF) / (double)(1ULL << 32);
+        int64_t const pos_fp = r->pos_fp;
+        int           idx    = (int)(pos_fp >> 32);
+        double        frac   = (double)(pos_fp & 0xFFFFFFFF) / (double)(1ULL << 32);
 
         double dacc = 0.0;
 
@@ -197,7 +204,7 @@ size_t resample_l16_advanced(
             int16_t const *const coeffs = SINC_COEFFS[p];
 
             // Check if we are near boundaries
-            if (likely(idx >= (size_t)center_off && idx < in_samples - (SINC_TAPS - center_off))) {
+            if (likely(idx >= center_off && idx < (int)in_samples - (SINC_TAPS - center_off))) {
                 int16_t const *const in_ptr = &in_data[idx - center_off];
 #ifdef __AVX2__
                 float const acc = mac_128_taps_avx2(in_ptr, coeffs);
@@ -276,7 +283,7 @@ size_t resample_l16_advanced(
             dacc = (dacc / 32767.0) * ratio;
         }
 
-        out_data[i] = (int16_t)round(dacc);
+        out_data[i] = clamp_to_int16(dacc);
         r->pos_fp += step_fp;
     }
 
@@ -297,11 +304,7 @@ size_t resample_l16_advanced(
             in_samples * sizeof(int16_t));
     }
 
-    if (r->pos_fp >= ((uint64_t)in_samples << 32)) {
-        r->pos_fp -= ((uint64_t)in_samples << 32);
-    } else {
-        r->pos_fp &= 0xFFFFFFFFULL;
-    }
+    r->pos_fp -= ((int64_t)in_samples << 32);
 
     return out_samples;
 }

@@ -1,4 +1,5 @@
 #include <immintrin.h>
+#include <math.h>
 #include <stdalign.h>
 #include <string.h>
 #include "machaudio/transcode.h"
@@ -39,7 +40,14 @@ int resampler_init(Resampler *const r, uint32_t in_rate, uint32_t out_rate) {
     r->phases = 0; // Use general linear interpolation by default
     r->taps   = 2;
     r->coeffs = NULL;
-    r->pos_fp = 0;
+    // Advanced resampler requires an initial delay to avoid reading future samples.
+    // Delay is max(64, ceil( (in_rate / out_rate) * 64 ))
+    double s = (double)in_rate / (double)out_rate;
+    if (s < 1.0)
+        s = 1.0;
+    int64_t delay = (int64_t)ceil(s * 64.0);
+    r->pos_fp     = -(delay << 32);
+
     memset(r->delay_buf, 0, sizeof(r->delay_buf));
 
     // Maintain optimized path for common integer upsampling ratios

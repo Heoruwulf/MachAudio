@@ -35,7 +35,7 @@ void test_audio_process_transcode_echo(void) {
 
     Arena   arena;
     uint8_t arena_buf[2048];
-    arena_init(&arena, arena_buf, sizeof(arena_buf));
+    arena_init(&arena, arena_buf, sizeof(arena_buf), "transcode");
 
     uint8_t                     raw_payload[64] = {0};
     struct audio_input_payload *input_payload   = (struct audio_input_payload *)raw_payload;

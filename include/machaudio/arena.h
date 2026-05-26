@@ -7,6 +7,7 @@
 typedef struct Arena Arena;
 
 struct Arena {
+    char     name[32]; // name for logging/debugging purposes
     uint8_t *buf;
     size_t   size;
     size_t   curr;
@@ -16,7 +17,7 @@ struct Arena {
  * Initializes an arena with a given buffer and size.
  * The buffer must be managed by the caller.
  */
-void arena_init(Arena *const arena, void *const buf, size_t const size);
+void arena_init(Arena *const arena, void *const buf, size_t const size, char const *const name);
 
 /**
  * Allocates a block of memory from the arena.

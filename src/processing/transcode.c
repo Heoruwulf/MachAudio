@@ -28,6 +28,10 @@ int transcode_session_init(
     session->out_endian       = config->out_endian;
     session->out_sample_rate  = ntohl(config->out_sample_rate);
 
+    session->vad_enabled   = (ntohs(config->flags) & AUDIO_START_FLAGS_VAD_ENABLED) != 0;
+    session->vad_state     = NULL;
+    session->last_vad_prob = session->vad_enabled ? 0.0f : -1.0f;
+
     bool const host_le = is_host_little_endian();
 
     // Determine if we need to swap input L16
@@ -114,6 +118,8 @@ int audio_process_transcode(
     struct audio_input_payload const *const payload,
     size_t const                            payload_len,
     Arena *const                            out_arena) {
+
+    size_t const initial_curr = out_arena->curr;
     if (unlikely(session == NULL || payload == NULL || out_arena == NULL)) {
         return -1;
     }
@@ -195,6 +201,19 @@ int audio_process_transcode(
         return -1;
     }
 
+    // Run VAD on the combined mixed input stream if VAD is enabled and the input is L16 16kHz
+    session->last_vad_prob = -1.0f;
+    if (session->vad_enabled && session->vad_state != NULL &&
+        session->in_sample_rate == VAD_SAMPLE_RATE)
+    {
+        session->last_vad_prob = vad_gru_process_pcm(
+            session->vad_state,
+            l16_buf,
+            l16_samples,
+            VAD_SAMPLE_RATE,
+            (int)session->in_channels);
+    }
+
     // 2. Resample (if needed)
     int16_t *resampled_buf     = l16_buf;
     size_t   resampled_samples = l16_samples;
@@ -209,6 +228,19 @@ int audio_process_transcode(
             resample_l16_advanced(session, l16_buf, l16_samples, resampled_buf, out_cap);
     }
 
+    // Run VAD on the resampled stream if VAD is enabled, output is 16kHz, and we haven't run VAD
+    // yet
+    if (session->vad_enabled && session->vad_state != NULL && session->last_vad_prob == -1.0f &&
+        session->out_sample_rate == VAD_SAMPLE_RATE)
+    {
+        session->last_vad_prob = vad_gru_process_pcm(
+            session->vad_state,
+            resampled_buf,
+            resampled_samples,
+            VAD_SAMPLE_RATE,
+            (int)session->out_channels);
+    }
+
     // 3. Encode / Prepare Output
     if (session->out_payload_type == CODEC_OPUS) {
         uint8_t *const opus_out = arena_alloc(out_arena, 4000);
@@ -218,31 +250,31 @@ int audio_process_transcode(
             transcode_l16_to_opus(session, resampled_buf, resampled_samples, opus_out, 4000);
         if (encoded_bytes < 0)
             return -1;
-        memmove(out_arena->buf, opus_out, (size_t)encoded_bytes);
-        out_arena->curr = (size_t)encoded_bytes;
+        memmove((uint8_t *)out_arena->buf + initial_curr, opus_out, (size_t)encoded_bytes);
+        out_arena->curr = initial_curr + (size_t)encoded_bytes;
     } else if (session->out_payload_type == CODEC_PCMU) {
         size_t const   out_len  = resampled_samples;
         uint8_t *const pcmu_out = arena_alloc(out_arena, out_len);
         if (!pcmu_out)
             return -1;
         transcode_l16_to_pcmu(session, resampled_buf, resampled_samples, pcmu_out);
-        memmove(out_arena->buf, pcmu_out, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, pcmu_out, out_len);
+        out_arena->curr = initial_curr + out_len;
     } else if (session->out_payload_type == CODEC_PCMA) {
         size_t const   out_len  = resampled_samples;
         uint8_t *const pcma_out = arena_alloc(out_arena, out_len);
         if (!pcma_out)
             return -1;
         transcode_l16_to_pcma(session, resampled_buf, resampled_samples, pcma_out);
-        memmove(out_arena->buf, pcma_out, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, pcma_out, out_len);
+        out_arena->curr = initial_curr + out_len;
     } else if (session->out_payload_type == CODEC_L16) {
         size_t const out_len = resampled_samples * session->out_channels * sizeof(int16_t);
         if (session->swap_out) {
             swap_endian_l16(resampled_buf, resampled_samples * session->out_channels);
         }
-        memmove(out_arena->buf, resampled_buf, out_len);
-        out_arena->curr = out_len;
+        memmove((uint8_t *)out_arena->buf + initial_curr, resampled_buf, out_len);
+        out_arena->curr = initial_curr + out_len;
     }
 
     return 0;

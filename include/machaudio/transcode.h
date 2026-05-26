@@ -3,6 +3,7 @@
 
 #include "machaudio/arena.h"
 #include "machaudio/protocol.h"
+#include "machaudio/vad_gru.h"
 
 #include <opus/opus.h>
 #include <stdbool.h>
@@ -26,7 +27,7 @@ typedef struct {
     int16_t const *coeffs;
     int            taps;
     int            phases;
-    uint64_t       pos_fp; // 32.32 fixed point
+    int64_t        pos_fp; // 32.32 fixed point
     int16_t        delay_buf[RESAMPLER_MAX_TAPS];
 } Resampler;
 
@@ -50,6 +51,11 @@ typedef struct {
     bool needs_resample;
 
     Resampler resampler;
+
+    // Voice Activity Detection (VAD) state
+    VadGruState *vad_state;
+    bool         vad_enabled;
+    float        last_vad_prob;
 } TranscodeSession;
 
 /**

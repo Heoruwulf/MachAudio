@@ -42,18 +42,19 @@ typedef struct {
     uint32_t payload_len; // Length of following payload
 } AudioMsgHeader;
 
+#define AUDIO_START_FLAGS_VAD_ENABLED 0x0001
+
 // CMD_START payload (16 bytes, aligned)
 struct audio_start_payload {
     uint8_t  in_payload_type; // e.g., 0 (PCMU), 8 (PCMA), 96 (L16), 111 (Opus)
     uint8_t  in_channels;     // 1 or 2
-    uint8_t  in_endian;       // 0 (none), 1 (little-endian), 2 (big-endian)
-    uint8_t  reserved1;       // Padding for alignment
+    uint16_t flags;           // AUDIO_START_FLAGS_*
     uint32_t in_sample_rate;  // e.g., 8000, 16000
 
+    uint8_t  in_endian;        // 0 (none), 1 (little-endian), 2 (big-endian)
     uint8_t  out_payload_type; // e.g., 96 (L16)
     uint8_t  out_channels;     // 1 or 2
     uint8_t  out_endian;       // 0 (none), 1 (little-endian), 2 (big-endian)
-    uint8_t  reserved2;        // Padding for alignment
     uint32_t out_sample_rate;  // e.g., 16000
 };
 
@@ -69,10 +70,12 @@ struct audio_buffer_header {
     float    volume; // IEEE 754 float, 0.0 to 1.0
 };
 
-// CMD_OUTPUT payload: duration + raw data
+// CMD_OUTPUT payload: duration + VAD probability + raw data
 struct audio_output_payload {
     uint64_t duration_ns; // Time spent in transcoding pipeline in nanoseconds
-    uint8_t  data[];      // Flexible array member for raw audio (naturally 8-byte aligned)
+    float    vad_prob;    // VAD probability (-1.0f if disabled, 0.0f to 1.0f if enabled)
+    uint8_t  reserved[4]; // Padding to maintain 8-byte alignment for data[]
+    uint8_t  data[];      // Flexible array member for raw audio
 };
 
 // CMD_ERROR payload

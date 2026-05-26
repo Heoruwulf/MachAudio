@@ -6,8 +6,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 # Security and Quality Flags
-set(COMMON_FLAGS "-Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -mavx2")
-add_definitions(-D_GNU_SOURCE)
+set(COMMON_FLAGS "-Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -mavx2 -mfma")
+add_definitions(-D_GNU_SOURCE -DDEBUGLOGS)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_FLAGS}")
 
 option(BUILD_FUZZERS "Build libFuzzer targets (requires Clang)" OFF)

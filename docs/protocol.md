@@ -36,13 +36,12 @@ Initializes a processing session with specific codec and sample rate parameters.
 | :--- | :--- | :--- | :--- |
 | 0 | `uint8` | `in_pt` | Input Payload Type (0=PCMU, 8=PCMA, 96=L16, 111=Opus) |
 | 1 | `uint8` | `in_ch` | Input Channels (1=Mono, 2=Stereo) |
-| 2 | `uint8` | `in_end` | Input Endianness (0=None, 1=LE, 2=BE) |
-| 3 | `uint8` | `res1` | Reserved (Padding) |
+| 2 | `uint16` | `flags` | Session Feature Flags (Bit 0 / `0x0001` = VAD enabled) |
 | 4 | `uint32` | `in_rate` | Input Sample Rate (e.g., 8000, 16000, 48000) |
-| 8 | `uint8` | `out_pt` | Output Payload Type |
-| 9 | `uint8` | `out_ch` | Output Channels |
-| 10 | `uint8` | `out_end` | Output Endianness |
-| 11 | `uint8` | `res2` | Reserved (Padding) |
+| 8 | `uint8` | `in_end` | Input Endianness (0=None, 1=LE, 2=BE) |
+| 9 | `uint8` | `out_pt` | Output Payload Type |
+| 10 | `uint8` | `out_ch` | Output Channels |
+| 11 | `uint8` | `out_end` | Output Endianness |
 | 12 | `uint32` | `out_rate` | Output Sample Rate |
 
 ---
@@ -87,7 +86,9 @@ Response to `CMD_INPUT` containing the transcoded/processed audio.
 | Offset | Type | Field | Description |
 | :--- | :--- | :--- | :--- |
 | 0 | `uint64` | `duration_ns` | Time spent in processing pipeline (nanoseconds) |
-| 8 | `uint8[]` | `data` | Raw processed audio data (size = `payload_len - 8`) |
+| 8 | `float` | `vad_prob` | VAD speech probability (`-1.0f` if disabled, `0.0f` to `1.0f` if enabled) |
+| 12 | `uint8[4]` | `reserved` | Padding to maintain 8-byte alignment for flexible data array |
+| 16 | `uint8[]` | `data` | Raw processed audio data (size = `payload_len - 16`) |
 
 ---
 
@@ -164,3 +165,8 @@ When creating client code:
      2. Discovery: Send `CMD_DISCOVER` to retrieve the total `num_workers` available in the cluster.
      3. Load Balancing: For every new audio session (e.g., a new stream or call), the client should select a worker using a **round-robin** strategy to spread work evenly across the pool.
      4. Persistence: Establish a persistent connection to the selected worker's specific socket/port for the duration of that session.
+5. **Voice Activity Detection (VAD) Integration:**
+   - **Activation:** Set the Least Significant Bit (`0x0001`) of the `flags` field in the `CMD_START` payload to enable real-time speech detection.
+   - **Inference Pipeline:** When enabled, the server runs a zero-allocation Micro-GRU neural network directly on 16kHz resampled/mono PCM buffers.
+   - **Probability Extraction:** In each `CMD_OUTPUT` frame, extract the network-ordered float `vad_prob`. Values range from `0.0f` to `1.0f` (representing voice activity confidence), while `-1.0f` is returned if VAD is disabled or unavailable.
+   - **Performance:** With VAD enabled (with encode, resample, and mix) on a 20ms packet time (`ptime 20`), the average processing latency remains under **0.364 ms** (with a **0.411 ms** P95 latency), ensuring immediate, real-time agent turn-taking response times.
