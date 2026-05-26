@@ -19,7 +19,7 @@ The service communicates over Unix Domain Sockets (UDS) and TCP/IP using a custo
   * **Opus:** Integration with `libopus` for high-quality, low-latency VoIP encoding and decoding.
   * **L16:** Raw 16-bit PCM with automatic endianness swapping based on host and protocol specifications.
 * **Dynamic Resampling:** High-quality sample rate conversion (e.g., 8kHz to 48kHz) using SIMD-accelerated polyphase FIR filters.
-* **Voice Activity Detection (VAD):** Integrated zero-allocation, real-time Voice Activity Detection using a Micro-GRU neural network architecture, accelerated with AVX2/FMA intrinsics. Returns real-time speech probability (0.0f to 1.0f) packaged directly in output frames.
+* **Voice Activity Detection (VAD):** Integrated zero-allocation, real-time Voice Activity Detection using a Micro-GRU neural network architecture, accelerated with AVX2/FMA intrinsics. Returns real-time speech probability (0.0f to 1.0f) packaged directly in output frames. For architecture details, dataset sensitivities, and the VAD Spectrogram Dashboard, see the [Micro-GRU VAD Documentation](docs/micro-gru-vad.md).
 * **Asynchronous I/O:** Event-driven architecture utilizing a dedicated `libuv` reactor loop per worker process.
 
 ## ⚡ Performance & Capacity Projections
