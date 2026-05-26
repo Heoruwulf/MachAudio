@@ -770,7 +770,7 @@ int main(int argc, char **argv) {
                 LOGERR("Failed to open output audio file: %s", filename);
             }
 
-            snprintf(filename, sizeof(filename), "output_%s.vad", timestamp_str);
+            snprintf(filename, sizeof(filename), "output_%s_%04u.vad", timestamp_str, i);
 
             conn->output_vad_file = fopen(filename, "wb");
             if (!conn->output_vad_file) {
