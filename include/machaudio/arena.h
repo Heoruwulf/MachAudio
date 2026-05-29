@@ -14,27 +14,20 @@ struct Arena {
 };
 
 /**
- * Initializes an arena with a given buffer and size.
- * The buffer must be managed by the caller.
+ * Implementation functions that accept caller file and line details.
+ * Do not call these directly; use the macro wrappers below.
  */
-void arena_init(Arena *const arena, void *const buf, size_t const size, char const *const name);
+void arena_init_impl(Arena *const arena, void *const buf, size_t const size, char const *const name, char const *file, int line);
+void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, int line);
+void arena_reset_impl(Arena *const arena, char const *file, int line);
+size_t arena_used_impl(Arena const *const arena, char const *file, int line);
 
 /**
- * Allocates a block of memory from the arena.
- * Returns NULL if the allocation fails (out of memory).
- * Ensures 8-byte alignment.
+ * Macro wrappers providing caller file and line instrumentation.
  */
-void *arena_alloc(Arena *const arena, size_t const size);
-
-/**
- * Resets the arena, making all its memory available for reuse.
- * Does not zero out the memory.
- */
-void arena_reset(Arena *const arena);
-
-/**
- * Returns the number of bytes used in the arena.
- */
-size_t arena_used(Arena const *const arena);
+#define arena_init(arena, buf, size, name) arena_init_impl((arena), (buf), (size), (name), __FILE__, __LINE__)
+#define arena_alloc(arena, size)           arena_alloc_impl((arena), (size), __FILE__, __LINE__)
+#define arena_reset(arena)                 arena_reset_impl((arena), __FILE__, __LINE__)
+#define arena_used(arena)                  arena_used_impl((arena), __FILE__, __LINE__)
 
 #endif // MACHAUDIO_ARENA_H

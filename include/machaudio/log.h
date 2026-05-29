@@ -41,9 +41,25 @@ static inline char const *log_get_signal_name(int signum) {
         fflush(stdout);                                                                            \
     } while (0)
 
+#define LOGINF_LOC(file, line, ...)                                                                \
+    do {                                                                                           \
+        fprintf(stdout, "[INFO] [%s:%d] ", file, line);                                            \
+        fprintf(stdout, __VA_ARGS__);                                                              \
+        fprintf(stdout, "\n");                                                                     \
+        fflush(stdout);                                                                            \
+    } while (0)
+
 #define LOGERR(...)                                                                                \
     do {                                                                                           \
         fprintf(stderr, "[ERRO] [%s:%d] ", __FILE__, __LINE__);                                    \
+        fprintf(stderr, __VA_ARGS__);                                                              \
+        fprintf(stderr, "\n");                                                                     \
+        fflush(stderr);                                                                            \
+    } while (0)
+
+#define LOGERR_LOC(file, line, ...)                                                                \
+    do {                                                                                           \
+        fprintf(stderr, "[ERRO] [%s:%d] ", file, line);                                            \
         fprintf(stderr, __VA_ARGS__);                                                              \
         fprintf(stderr, "\n");                                                                     \
         fflush(stderr);                                                                            \
@@ -57,8 +73,20 @@ static inline char const *log_get_signal_name(int signum) {
         fprintf(stdout, "\n");                                                                     \
         fflush(stdout);                                                                            \
     } while (0)
+
+#define LOGDBG_LOC(file, line, ...)                                                                \
+    do {                                                                                           \
+        fprintf(stdout, "[DBUG]\t[%s:%d] ", file, line);                                           \
+        fprintf(stdout, __VA_ARGS__);                                                              \
+        fprintf(stdout, "\n");                                                                     \
+        fflush(stdout);                                                                            \
+    } while (0)
 #else
 #define LOGDBG(...)                                                                                \
+    do {                                                                                           \
+    } while (0)
+
+#define LOGDBG_LOC(file, line, ...)                                                                \
     do {                                                                                           \
     } while (0)
 #endif
