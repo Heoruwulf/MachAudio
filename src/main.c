@@ -5,19 +5,12 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <uv.h>
 #include "machaudio/log.h"
 #include "machaudio/os_tune.h"
 #include "machaudio/server.h"
 
 #define DEFAULT_SOCKET_DIR  "/tmp"
 #define DEFAULT_SOCKET_NAME "machaudio"
-
-static void on_signal(uv_signal_t *handle, int signum) {
-    LOGINF("Received signal %s, shutting down...", log_get_signal_name(signum));
-    MachServer *const server = (MachServer *)handle->data;
-    mach_server_stop(server);
-}
 
 static void print_usage(char const *const prog) {
     fprintf(stderr, "Usage: %s [options]\n", prog);
@@ -52,13 +45,12 @@ int run_worker(
     os_tune_cpu_governor(base_core + worker_index);
     int dma_latency_fd = os_lock_dma_latency();
 
-    uv_loop_t *const loop = uv_default_loop();
-    MachServer       server;
-    char             socket_path[256];
-    int              r;
+    MachServer server;
+    char       socket_path[256];
+    int        r;
 
     if (host) {
-        r = mach_server_init(&server, loop, NULL, host, base_port + worker_index, num_workers);
+        r = mach_server_init(&server, NULL, host, base_port + worker_index, num_workers);
     } else {
         snprintf(
             socket_path,
@@ -67,28 +59,19 @@ int run_worker(
             uds_dir,
             DEFAULT_UDS_NAME,
             worker_index);
-        r = mach_server_init(&server, loop, socket_path, NULL, 0, num_workers);
+        r = mach_server_init(&server, socket_path, NULL, 0, num_workers);
     }
 
     if (r != 0) {
         LOGERR("Worker %d failed to initialize server", worker_index);
+        if (dma_latency_fd >= 0) {
+            close(dma_latency_fd);
+        }
+        os_restore_cpu_governor(base_core + worker_index);
         return 1;
     }
 
-    if (mach_server_start(&server) != 0) {
-        LOGERR("Worker %d failed to start server", worker_index);
-        return 1;
-    }
-
-    uv_signal_t sig_int, sig_term;
-    uv_signal_init(loop, &sig_int);
-    sig_int.data = &server;
-    uv_signal_start(&sig_int, on_signal, SIGINT);
-    uv_signal_init(loop, &sig_term);
-    sig_term.data = &server;
-    uv_signal_start(&sig_term, on_signal, SIGTERM);
-
-    r = uv_run(loop, UV_RUN_DEFAULT);
+    r = mach_server_start(&server);
     LOGINF("Worker %d stopping.", worker_index);
 
     if (dma_latency_fd >= 0) {

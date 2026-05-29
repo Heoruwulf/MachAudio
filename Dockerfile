@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     cmake \
     pkgconf \
     git \
-    libuv-dev \
+    liburing-dev \
     opus-dev
 
 # Set working directory
@@ -33,7 +33,7 @@ FROM alpine:3.22.4
 
 # Install runtime dependencies ONLY
 RUN apk add --no-cache \
-    libuv \
+    liburing \
     opus
 
 # Security best practice: Create a non-root user to run the daemon

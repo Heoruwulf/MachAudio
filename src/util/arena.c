@@ -9,7 +9,7 @@ static inline __attribute__((always_inline)) size_t align_up(size_t const n, siz
     return (n + align - 1) & ~(align - 1);
 }
 
-void arena_init(Arena *const arena, void *const buf, size_t const size, char const *const name) {
+void arena_init_impl(Arena *const arena, void *const buf, size_t const size, char const *const name, char const *file, int line) {
     if (arena == NULL) {
         return;
     }
@@ -24,21 +24,22 @@ void arena_init(Arena *const arena, void *const buf, size_t const size, char con
     }
     arena->curr = 0;
 
-    LOGINF("Initialized arena '%s' with size %zu bytes", arena->name, arena->size);
+    LOGINF_LOC(file, line, "Initialized arena '%s' with size %zu bytes", arena->name, arena->size);
 }
 
-void *arena_alloc(Arena *const arena, size_t const size) {
+void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, int line) {
     if (arena == NULL)
         return NULL;
 
     if (arena->buf == NULL || arena->size == 0) {
-        LOGERR("Arena '%s' is not properly initialized", arena->name);
+        LOGERR_LOC(file, line, "Arena '%s' is not properly initialized", arena->name);
         return NULL;
     }
 
     size_t const aligned_curr = align_up(arena->curr, 8);
     if (aligned_curr + size > arena->size) {
-        LOGERR(
+        LOGERR_LOC(
+            file, line,
             "Arena '%s' out of memory: requested %zu bytes, available %zu bytes",
             arena->name,
             size,
@@ -49,7 +50,8 @@ void *arena_alloc(Arena *const arena, size_t const size) {
     void *const ptr = &arena->buf[aligned_curr];
     arena->curr     = aligned_curr + size;
 
-    LOGDBG(
+    LOGDBG_LOC(
+        file, line,
         "Arena '%s' allocated %zu bytes, used %zu/%zu bytes",
         arena->name,
         size,
@@ -59,17 +61,17 @@ void *arena_alloc(Arena *const arena, size_t const size) {
     return ptr;
 }
 
-void arena_reset(Arena *const arena) {
+void arena_reset_impl(Arena *const arena, char const *file, int line) {
     if (arena != NULL) {
         arena->curr = 0;
-        LOGDBG("Arena '%s' reset, used 0/%zu bytes", arena->name, arena->size);
+        LOGDBG_LOC(file, line, "Arena '%s' reset, used 0/%zu bytes", arena->name, arena->size);
     }
 }
 
-size_t arena_used(Arena const *const arena) {
+size_t arena_used_impl(Arena const *const arena, char const *file, int line) {
     if (arena == NULL) {
         return 0;
     }
-    LOGDBG("Arena '%s' used %zu/%zu bytes", arena->name, arena->curr, arena->size);
+    LOGDBG_LOC(file, line, "Arena '%s' used %zu/%zu bytes", arena->name, arena->curr, arena->size);
     return arena->curr;
 }
