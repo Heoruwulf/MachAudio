@@ -765,11 +765,21 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    char timestamp_str[64] = {0};
+    char timestamp_str[256] = {0};
     if (g_app.config.write_output) {
         time_t const           t  = time(NULL);
         struct tm const *const tm = localtime(&t);
-        strftime(timestamp_str, sizeof(timestamp_str), "%Y%m%d_%H%M%S", tm);
+        char                   hhmmss[64];
+        strftime(hhmmss, sizeof(hhmmss), "%Y%m%d_%H%M%S", tm);
+
+        if (mkdir("client-tests", 0755) != 0) {
+            // Ignore EEXIST errors
+        }
+
+        snprintf(timestamp_str, sizeof(timestamp_str), "client-tests/%s", hhmmss);
+        if (mkdir(timestamp_str, 0755) != 0) {
+            // Ignore EEXIST errors
+        }
     }
 
     for (uint32_t i = 0; i < g_app.config.concurrent; i++) {
@@ -783,13 +793,18 @@ int main(int argc, char **argv) {
         uv_timer_init(g_app.loop, &conn->timer);
 
         if (g_app.config.write_output) {
-            char filename[256];
+            char conn_dir[256];
+            snprintf(conn_dir, sizeof(conn_dir), "%s/%04u", timestamp_str, i);
+            if (mkdir(conn_dir, 0755) != 0) {
+                // Ignore EEXIST errors
+            }
+
+            char filename[512];
             snprintf(
                 filename,
                 sizeof(filename),
-                "output_%s_%04u.%s",
-                timestamp_str,
-                i,
+                "%s/output.%s",
+                conn_dir,
                 get_codec_extension(g_app.config.out_format));
 
             conn->output_file = fopen(filename, "wb");
@@ -797,7 +812,7 @@ int main(int argc, char **argv) {
                 LOGERR("Failed to open output audio file: %s", filename);
             }
 
-            snprintf(filename, sizeof(filename), "output_%s_%04u.vad", timestamp_str, i);
+            snprintf(filename, sizeof(filename), "%s/output.vad", conn_dir);
 
             conn->output_vad_file = fopen(filename, "wb");
             if (!conn->output_vad_file) {
@@ -841,13 +856,15 @@ int main(int argc, char **argv) {
 
     for (uint32_t i = 0; i < g_app.config.concurrent; i++) {
         ClientConnection *const conn = &g_app.connections[i];
+        uint64_t avg_val = 0;
+        uint64_t p95_val = 0;
 
         if (conn->latencies_count > 0) {
             qsort(conn->latencies, conn->latencies_count, sizeof(uint64_t), compare_uint64);
 
             size_t const   p95_idx = (conn->latencies_count * 95) / 100;
-            uint64_t const p95_val = conn->latencies[p95_idx];
-            uint64_t const avg_val = conn->sum_duration_ns / conn->latencies_count;
+            p95_val = conn->latencies[p95_idx];
+            avg_val = conn->sum_duration_ns / conn->latencies_count;
 
             LOGINF(
                 "  Conn %u: Avg: %.3f ms, P95: %.3f ms, Min: %.3f ms, Max: %.3f ms (samples: %zu)",
@@ -864,6 +881,49 @@ int main(int argc, char **argv) {
                     conn->latencies,
                     conn->latencies_count * sizeof(uint64_t));
                 all_latencies_idx += conn->latencies_count;
+            }
+        }
+
+        if (g_app.config.write_output) {
+            char stats_filename[512];
+            snprintf(stats_filename, sizeof(stats_filename), "%s/%04u/stats.txt", timestamp_str, conn->id);
+            FILE *sf = fopen(stats_filename, "w");
+            if (sf) {
+                fprintf(sf, "=== Connection %04u Stats ===\n", conn->id);
+                fprintf(sf, "Connection ID:          %u\n", conn->id);
+                fprintf(sf, "Total Packets Sent:     %u\n", conn->sequence_id);
+                fprintf(sf, "Total Packets Received: %lu\n", conn->count_received);
+                fprintf(sf, "Total Bytes Sent:       %lu bytes\n", conn->total_sent);
+                fprintf(sf, "Total Bytes Received:   %lu bytes\n", conn->total_received);
+                
+                if (conn->latencies_count > 0) {
+                    fprintf(sf, "Min Latency:            %.3f ms\n", (double)conn->min_duration_ns / 1000000.0);
+                    fprintf(sf, "Max Latency:            %.3f ms\n", (double)conn->max_duration_ns / 1000000.0);
+                    fprintf(sf, "Avg Latency:            %.3f ms\n", (double)avg_val / 1000000.0);
+                    fprintf(sf, "P95 Latency:            %.3f ms\n", (double)p95_val / 1000000.0);
+                } else {
+                    fprintf(sf, "Min Latency:            N/A\n");
+                    fprintf(sf, "Max Latency:            N/A\n");
+                    fprintf(sf, "Avg Latency:            N/A\n");
+                    fprintf(sf, "P95 Latency:            N/A\n");
+                }
+                
+                if (g_app.config.input_file_2) {
+                    fprintf(sf, "Input Codecs:           %s, %s\n", 
+                            get_codec_extension(g_app.config.format),
+                            get_codec_extension(g_app.config.format));
+                    fprintf(sf, "Input Files:            %s, %s\n", 
+                            g_app.config.input_file,
+                            g_app.config.input_file_2);
+                } else {
+                    fprintf(sf, "Input Codec:            %s\n", get_codec_extension(g_app.config.format));
+                    fprintf(sf, "Input File:             %s\n", g_app.config.input_file);
+                }
+                fprintf(sf, "Output Codec:           %s\n", get_codec_extension(g_app.config.out_format));
+                fprintf(sf, "VAD Enabled:            %s\n", g_app.config.vad_enabled ? "Yes" : "No");
+                fclose(sf);
+            } else {
+                LOGERR("Failed to open stats file: %s", stats_filename);
             }
         }
 
@@ -893,15 +953,16 @@ int main(int argc, char **argv) {
     LOGINF("Global Summary:");
     LOGINF("  Total Sent:     %lu bytes", total_sent);
     LOGINF("  Total Received: %lu bytes", total_received);
+    
+    uint64_t avg_ns = 0;
+    uint64_t p95_ns = 0;
+    
     if (count_received > 0) {
-        uint64_t const avg_ns = sum_duration_ns / count_received;
-        uint64_t       p95_ns = 0;
-
+        avg_ns = sum_duration_ns / count_received;
         if (all_latencies) {
             qsort(all_latencies, total_latency_pool, sizeof(uint64_t), compare_uint64);
             size_t const p95_idx = (total_latency_pool * 95) / 100;
             p95_ns               = all_latencies[p95_idx];
-            free(all_latencies);
         }
 
         LOGINF(
@@ -910,6 +971,48 @@ int main(int argc, char **argv) {
             (double)global_max / 1000000.0,
             (double)avg_ns / 1000000.0,
             (double)p95_ns / 1000000.0);
+    }
+
+    if (g_app.config.write_output) {
+        char summary_filename[512];
+        snprintf(summary_filename, sizeof(summary_filename), "%s/summary.txt", timestamp_str);
+        FILE *sf = fopen(summary_filename, "w");
+        if (sf) {
+            fprintf(sf, "=== Global Test Summary ===\n");
+            fprintf(sf, "Timestamp:              %s\n", timestamp_str);
+            fprintf(sf, "Concurrent Connections: %u\n", g_app.config.concurrent);
+            fprintf(sf, "Total Sent:             %lu bytes\n", total_sent);
+            fprintf(sf, "Total Received:         %lu bytes\n", total_received);
+            
+            if (count_received > 0) {
+                fprintf(sf, "Min Latency:            %.3f ms\n", (double)global_min / 1000000.0);
+                fprintf(sf, "Max Latency:            %.3f ms\n", (double)global_max / 1000000.0);
+                fprintf(sf, "Avg Latency:            %.3f ms\n", (double)avg_ns / 1000000.0);
+                fprintf(sf, "P95 Latency:            %.3f ms\n", (double)p95_ns / 1000000.0);
+            } else {
+                fprintf(sf, "Min Latency:            N/A\n");
+                fprintf(sf, "Max Latency:            N/A\n");
+                fprintf(sf, "Avg Latency:            N/A\n");
+                fprintf(sf, "P95 Latency:            N/A\n");
+            }
+            
+            if (g_app.config.input_file_2) {
+                fprintf(sf, "Input Codecs:           %s, %s\n", 
+                        get_codec_extension(g_app.config.format),
+                        get_codec_extension(g_app.config.format));
+            } else {
+                fprintf(sf, "Input Codec:            %s\n", get_codec_extension(g_app.config.format));
+            }
+            fprintf(sf, "Output Codec:           %s\n", get_codec_extension(g_app.config.out_format));
+            fprintf(sf, "VAD Enabled:            %s\n", g_app.config.vad_enabled ? "Yes" : "No");
+            fclose(sf);
+        } else {
+            LOGERR("Failed to open summary file: %s", summary_filename);
+        }
+    }
+
+    if (all_latencies) {
+        free(all_latencies);
     }
 
     munmap(g_app.input_data, g_app.input_size);

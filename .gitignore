@@ -41,6 +41,7 @@ Testing/
 *.gcov
 coverage.info
 coverage/
+client-tests/
 
 *.wav
 *.mulaw

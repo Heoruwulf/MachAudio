@@ -3,6 +3,7 @@ build/
 build_fuzz/
 build_analyze/
 bin/
+client-tests/
 
 # Version control
 .git/
