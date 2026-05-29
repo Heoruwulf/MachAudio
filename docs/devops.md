@@ -19,11 +19,10 @@ You should not add core governor or DMA latency tuning directly to the `Dockerfi
 
 Even with the host tuned, you still need to instruct MachAudio on how to utilize the tuned environment.
 
-*   **`--workers <N>`:** You must dictate the concurrency model. If you reserved 4 tuned cores on the host, pass `--workers 4` so MachAudio forks enough reactor loops to utilize them.
+*   **`--core-mask <mask|csv>`:** You must dictate the concurrency model and core topology. If you reserved 4 tuned cores on the host (e.g. cores 2,3,4,5), pass `--core-mask 2,3,4,5`. MachAudio will explicitly lock its worker processes to these specific physical cores to prevent cache invalidation.
+    *   *K8s Exception:* If using Kubernetes with the **CPU Manager** (`static` policy), K8s handles the pinning dynamically, so you can omit this switch. If you are *not* using CPU Manager but still want unpinned workers, you can pass a list of `none`s (e.g. `--core-mask none,none,none,none`).
 *   **`--rt-priority <N>`:** Host tuning prepares the hardware, but this switch tells the Linux Scheduler to treat your specific application as mission-critical. Setting this upgrades the process to the `SCHED_FIFO` real-time class, preempting almost any other normal process on that core.
     *   *Requirement:* The container must be run with the `CAP_SYS_NICE` capability.
-*   **`--cpu-core <N>`:** Tells MachAudio to explicitly lock its worker processes to specific physical cores to prevent cache invalidation caused by process migration.
-    *   *K8s Exception:* If using Kubernetes with the **CPU Manager** (`static` policy), K8s handles the pinning dynamically, so you can omit this switch.
 
 ## Deployment Strategies
 
@@ -43,7 +42,7 @@ If you are deploying to a dedicated VM or bare metal server where you manage the
       --name machaudio \
       --network host \
       --cap-add=SYS_NICE \
-      machaudio --workers 4 --cpu-core 2 --rt-priority 90
+      machaudio --core-mask 2,3,4,5 --rt-priority 90
     ```
 
 ### Kubernetes (K8s)
@@ -67,8 +66,8 @@ spec:
       containers:
       - name: machaudio
         image: machaudio:latest
-        command: ["machaudio", "--workers", "4", "--rt-priority", "90"]
-        # Notice --cpu-core is omitted; K8s CPU Manager handles pinning.
+        command: ["machaudio", "--core-mask", "0,1,2,3", "--rt-priority", "90"]
+        # In K8s, workers use these logical indices while K8s handles physical pinning.
         resources:
           requests:
             cpu: "4"      # Integer required for Guaranteed QoS

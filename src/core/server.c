@@ -465,8 +465,11 @@ int mach_server_init(
     // Initialize io_uring
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags         = IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF;
-    params.sq_thread_cpu = sq_thread_cpu;
+    params.flags         = IORING_SETUP_SQPOLL;
+    if (sq_thread_cpu != -1) {
+        params.flags |= IORING_SETUP_SQ_AFF;
+        params.sq_thread_cpu = sq_thread_cpu;
+    }
     int r                = io_uring_queue_init_params(QD, &server->ring, &params);
     if (r == -EINVAL) {
         LOGINF("SQPOLL invalid params, falling back to standard io_uring");

@@ -112,8 +112,7 @@ You can start the daemon with standard privileges, or use the CLI flags to spawn
 
 **Options:**
 
-* `-w, --workers <N>`: Forks `N` independent worker processes (default: 1).
-* `-c, --cpu-core <M>`: The starting (base) logical CPU core for thread pinning (default: 0).
+* `-c, --core-mask <mask|csv>`: Core mask in hex (e.g., `0x15`) or CSV (e.g., `0,2,4`) to pin workers to specific logical CPU cores (default: 0). The number of workers spawned equals the number of specified cores. You can also specify `none` to spawn unpinned workers (e.g. `none,none` spawns two unpinned workers).
 * `-p, --rt-priority <N>`: Elevates the thread scheduling policy to `SCHED_FIFO` (real-time) with the specified priority (1-99).
 * `-H, --host <IP>`: Activates TCP mode and binds workers to this host.
 * `-P, --port <P>`: The starting TCP port (default: 8000).
@@ -124,12 +123,14 @@ You can start the daemon with standard privileges, or use the CLI flags to spawn
 
 The supervisor process automatically spreads workers sequentially to maximize L1/L2 cache locality and prevent OS CPU migration. It uses a **base + offset** strategy.
 
-If you specify `-w 4 -c 2`, the supervisor will fork 4 workers:
+If you specify `-c 2,3,4,5` (or `-c 0x3C`), the supervisor will fork 4 workers:
 
-* **Worker 0:** Pinned to core **2** (`2 + 0`), listening on port **8000** (or `/tmp/machaudio.0.sock`).
-* **Worker 1:** Pinned to core **3** (`2 + 1`), listening on port **8001** (or `/tmp/machaudio.1.sock`).
-* **Worker 2:** Pinned to core **4** (`2 + 2`), listening on port **8002** (or `/tmp/machaudio.2.sock`).
-* **Worker 3:** Pinned to core **5** (`2 + 3`), listening on port **8003** (or `/tmp/machaudio.3.sock`).
+* **Worker 0:** Pinned to core **2**, listening on port **8000** (or `/tmp/machaudio.0.sock`).
+* **Worker 1:** Pinned to core **3**, listening on port **8001** (or `/tmp/machaudio.1.sock`).
+* **Worker 2:** Pinned to core **4**, listening on port **8002** (or `/tmp/machaudio.2.sock`).
+* **Worker 3:** Pinned to core **5**, listening on port **8003** (or `/tmp/machaudio.3.sock`).
+
+Alternatively, you can skip explicit CPU pinning by passing `none`. For example, `-c none,none` will spawn 2 workers that are scheduled dynamically by the OS kernel without explicit thread affinity.
 
 *Note: The client can automatically discover this topology by connecting to Worker 0 and sending a `CMD_DISCOVER` message.*
 
@@ -138,7 +139,7 @@ Using the `--rt-priority` flag requires elevated privileges. You must either run
 
 ```bash
 sudo setcap 'cap_sys_nice=ep' ./build/bin/machaudio
-./build/bin/machaudio --workers 4 --cpu-core 2 --rt-priority 85
+./build/bin/machaudio --core-mask 2,3,4,5 --rt-priority 85
 ```
 
 **Host Tuning Script:**
