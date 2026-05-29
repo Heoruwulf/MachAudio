@@ -65,7 +65,7 @@ static inline char const *log_get_signal_name(int signum) {
         fflush(stderr);                                                                            \
     } while (0)
 
-#if defined(DEBUG) || defined(DEBUGLOGS)
+#if defined(DEBUG)
 #define LOGDBG(...)                                                                                \
     do {                                                                                           \
         fprintf(stdout, "[DBUG]\t[%s:%d] ", __FILE__, __LINE__);                                   \
