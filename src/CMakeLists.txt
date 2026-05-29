@@ -9,12 +9,12 @@ add_library(machaudio_core STATIC ${CORE_SOURCES})
 
 target_include_directories(machaudio_core PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
-    ${LIBUV_INCLUDE_DIRS}
+    ${LIBURING_INCLUDE_DIRS}
     ${OPUS_INCLUDE_DIRS}
 )
 
 target_link_libraries(machaudio_core PRIVATE 
-    ${LIBUV_LIBRARIES}
+    ${LIBURING_LIBRARIES}
     ${OPUS_LIBRARIES}
 )
 
@@ -24,4 +24,4 @@ target_link_libraries(machaudio PRIVATE machaudio_core m)
 
 # Test Client
 add_executable(machaudio-client client/main.c)
-target_link_libraries(machaudio-client PRIVATE machaudio_core m)
+target_link_libraries(machaudio-client PRIVATE machaudio_core ${LIBUV_LIBRARIES} m)

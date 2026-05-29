@@ -20,7 +20,7 @@ The service communicates over Unix Domain Sockets (UDS) and TCP/IP using a custo
   * **L16:** Raw 16-bit PCM with automatic endianness swapping based on host and protocol specifications.
 * **Dynamic Resampling:** High-quality sample rate conversion (e.g., 8kHz to 48kHz) using SIMD-accelerated polyphase FIR filters.
 * **Voice Activity Detection (VAD):** Integrated zero-allocation, real-time Voice Activity Detection using a Micro-GRU neural network architecture, accelerated with AVX2/FMA intrinsics. Returns real-time speech probability (0.0f to 1.0f) packaged directly in output frames. For architecture details, dataset sensitivities, and the VAD Spectrogram Dashboard, see the [Micro-GRU VAD Documentation](docs/micro-gru-vad.md).
-* **Asynchronous I/O:** Event-driven architecture utilizing a dedicated `libuv` reactor loop per worker process.
+* **Asynchronous I/O:** Event-driven architecture utilizing a dedicated, native `io_uring` proactor event loop per worker process.
 
 ## ⚡ Performance & Capacity Projections
 
@@ -61,7 +61,7 @@ Linear scaling is achieved via the pre-forking architecture. A standard 8-core i
 
 ## 🏗 Architecture
 
-1. **Transport Layer:** Unified `libuv` stream handling supports both Unix Domain Sockets (e.g., `/tmp/machaudio.N.sock`) and TCP/IP (e.g., port `8000 + N`), managing non-blocking reads and writes. For details on container orchestration and auto-scaling, see the [Deployment Guide](docs/deploy.md) and [DevOps & Deployment Guide](docs/devops.md).
+1. **Transport Layer:** Native `io_uring` proactor stream handling supports both Unix Domain Sockets (e.g., `/tmp/machaudio.N.sock`) and TCP/IP (e.g., port `8000 + N`), managing non-blocking reads and writes without system-call overhead. For details on container orchestration and auto-scaling, see the [Deployment Guide](docs/deploy.md) and [DevOps & Deployment Guide](docs/devops.md).
 2. **Protocol Layer:** A custom, naturally aligned sequential TLV binary protocol. It parses fixed-size headers (`AudioMsgHeader`) and structured payloads including `CMD_START`, `CMD_INPUT` (supporting multiple sequential audio buffers), `CMD_DISCOVER`, `CMD_PING`, and explicit `CMD_ERROR` states. For detailed integration info, see the [Protocol Specification](docs/protocol.md).
 3. **Processing Pipeline:**
     * **Decode:** Converts incoming streams (Opus, PCMU, PCMA) to a normalized L16 format within the Arena.
@@ -74,8 +74,8 @@ Linear scaling is achieved via the pre-forking architecture. A standard 8-core i
 
 Ensure you have a C11 compatible compiler, CMake (3.15+), and the required development headers installed.
 
-* **Debian/Ubuntu:** `sudo apt-get install cmake gcc clang clang-tools libuv1-dev libopus-dev`
-* **Alpine:** `apk add cmake gcc clang clang-extra-tools musl-dev libuv-dev opus-dev`
+* **Debian/Ubuntu:** `sudo apt-get install cmake gcc clang clang-tools liburing-dev libuv1-dev libopus-dev`
+* **Alpine:** `apk add cmake gcc clang clang-extra-tools musl-dev liburing-dev libuv-dev opus-dev`
 
 ### Build Instructions
 
