@@ -22,21 +22,29 @@ else
     WORKERS=1
 fi
 
-# Check if the user already provided --workers or -w in the arguments
-HAS_WORKERS=0
+# Build default core mask (CSV format)
+CORE_MASK="0"
+i=1
+while [ "$i" -lt "$WORKERS" ]; do
+    CORE_MASK="$CORE_MASK,$i"
+    i=$((i + 1))
+done
+
+# Check if the user already provided --core-mask or -c in the arguments
+HAS_MASK=0
 for arg in "$@"; do
     case "$arg" in
-        --workers|-w)
-            HAS_WORKERS=1
+        --core-mask|-c)
+            HAS_MASK=1
             break
             ;;
     esac
 done
 
-# If --workers wasn't explicitly overridden by the user, append our calculated default
-if [ "$HAS_WORKERS" -eq 0 ]; then
-    set -- "$@" --workers "$WORKERS"
-    echo "[Docker] Automatically scaling to $WORKERS worker(s) based on $CORES available core(s)."
+# If --core-mask wasn't explicitly overridden by the user, append our calculated default
+if [ "$HAS_MASK" -eq 0 ]; then
+    set -- "$@" --core-mask "$CORE_MASK"
+    echo "[Docker] Automatically scaling to $WORKERS worker(s) using cores: $CORE_MASK"
 fi
 
 # Execute the actual MachAudio binary with the final arguments

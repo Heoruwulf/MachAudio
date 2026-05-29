@@ -14,13 +14,13 @@ By default, the entrypoint will automatically spawn **`nproc - 1` workers** (wit
 
 * *Example:* If you assign a Kubernetes Pod a CPU limit of `8.0`, the container will automatically spawn 7 workers.
 
-You can explicitly override this by passing the `--workers <N>` or `-w <N>` flag to the container command.
+You can explicitly override this by passing the `--core-mask <mask|csv>` or `-c <mask|csv>` flag to the container command.
 
 ### CPU Pinning
 
-When running directly on a Linux host, MachAudio accepts a `--cpu-core <M>` argument to pin workers to specific logical cores using a "base + offset" strategy to preserve L1/L2 cache locality.
+When running directly on a Linux host, MachAudio accepts a `--core-mask <mask|csv>` argument to explicitly pin workers to specific logical cores to preserve L1/L2 cache locality.
 
-**Note for Container Environments:** CPU pinning is generally handled by the orchestrator (e.g., Kubernetes `Static` CPU Manager policy). If you are relying on Kubernetes for core affinity, you do **not** need to pass `--cpu-core` to the MachAudio binary.
+**Note for Container Environments:** CPU pinning is generally handled by the orchestrator (e.g., Kubernetes `Static` CPU Manager policy). If you are relying on Kubernetes for core affinity, the docker entrypoint will automatically spawn workers matching your CPU limits. You do **not** need to pass `--core-mask` to the MachAudio binary manually unless overriding. If you want to spawn multiple workers but allow Kubernetes to schedule them dynamically across the pod's CPU set without explicit pinning within MachAudio, you can override with `--core-mask none,none,none...` (one `none` for each worker).
 
 ## 2. Networking and Port Allocation
 
@@ -59,7 +59,7 @@ docker run -d --name machaudio -p 8000-8002:8000-8002 machaudio:latest
 
 ```bash
 # Forces 8 workers starting at port 9000
-docker run -d --name machaudio -p 9000-9007:9000-9007 machaudio:latest --port 9000 --workers 8
+docker run -d --name machaudio -p 9000-9007:9000-9007 machaudio:latest --port 9000 --core-mask 0,1,2,3,4,5,6,7
 ```
 
 ### Kubernetes
