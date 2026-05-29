@@ -61,9 +61,9 @@ typedef struct {
     FILE      *output_file;
     FILE      *output_vad_file;
 
-    uint8_t   *read_buf;
-    size_t     read_buf_len;
-    size_t     read_buf_cap;
+    uint8_t *read_buf;
+    size_t   read_buf_len;
+    size_t   read_buf_cap;
 
     // Statistics
     uint64_t  total_sent;
@@ -375,7 +375,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
             }
             uint8_t *new_buf = realloc(conn->read_buf, new_cap);
             if (new_buf) {
-                conn->read_buf = new_buf;
+                conn->read_buf     = new_buf;
                 conn->read_buf_cap = new_cap;
             } else {
                 LOGERR("Failed to allocate read buffer");

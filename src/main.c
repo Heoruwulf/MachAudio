@@ -1,14 +1,14 @@
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <dirent.h>
-#include <sched.h>
-#include <string.h>
-#include <errno.h>
 #include "machaudio/log.h"
 #include "machaudio/os_tune.h"
 #include "machaudio/server.h"
@@ -20,16 +20,18 @@
 static void tune_sqpoll_thread(pid_t worker_pid, int rt_priority, int core) {
     char path[256];
     snprintf(path, sizeof(path), "/proc/%d/task", worker_pid);
-    
+
     for (int attempt = 0; attempt < 10; attempt++) {
         DIR *dir = opendir(path);
-        if (!dir) return;
+        if (!dir)
+            return;
 
-        bool found = false;
+        bool           found = false;
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
-            if (ent->d_name[0] == '.') continue;
-            
+            if (ent->d_name[0] == '.')
+                continue;
+
             char comm_path[1024];
             snprintf(comm_path, sizeof(comm_path), "%s/%s/comm", path, ent->d_name);
             FILE *f = fopen(comm_path, "r");
@@ -39,19 +41,25 @@ static void tune_sqpoll_thread(pid_t worker_pid, int rt_priority, int core) {
                     if (strncmp(comm, "iou-sqp", 7) == 0) {
                         pid_t tid = atoi(ent->d_name);
                         LOGINF("Found SQPOLL thread %d for worker %d, tuning...", tid, worker_pid);
-                        
+
                         if (rt_priority > 0) {
-                            struct sched_param sp = { .sched_priority = rt_priority };
+                            struct sched_param sp = {.sched_priority = rt_priority};
                             if (sched_setscheduler(tid, SCHED_FIFO, &sp) < 0) {
-                                LOGERR("Failed to set SCHED_FIFO for SQPOLL thread %d: %s", tid, strerror(errno));
+                                LOGERR(
+                                    "Failed to set SCHED_FIFO for SQPOLL thread %d: %s",
+                                    tid,
+                                    strerror(errno));
                             }
                         }
-                        
+
                         cpu_set_t cpuset;
                         CPU_ZERO(&cpuset);
                         CPU_SET(core, &cpuset);
                         if (sched_setaffinity(tid, sizeof(cpu_set_t), &cpuset) < 0) {
-                            LOGERR("Failed to set CPU affinity for SQPOLL thread %d: %s", tid, strerror(errno));
+                            LOGERR(
+                                "Failed to set CPU affinity for SQPOLL thread %d: %s",
+                                tid,
+                                strerror(errno));
                         }
                         found = true;
                     }
@@ -60,7 +68,8 @@ static void tune_sqpoll_thread(pid_t worker_pid, int rt_priority, int core) {
             }
         }
         closedir(dir);
-        if (found) break;
+        if (found)
+            break;
         usleep(50000); // 50ms wait
     }
 }
@@ -103,7 +112,13 @@ int run_worker(
     int        r;
 
     if (host) {
-        r = mach_server_init(&server, NULL, host, base_port + worker_index, num_workers, base_core + worker_index);
+        r = mach_server_init(
+            &server,
+            NULL,
+            host,
+            base_port + worker_index,
+            num_workers,
+            base_core + worker_index);
     } else {
         snprintf(
             socket_path,

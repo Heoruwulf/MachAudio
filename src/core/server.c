@@ -22,11 +22,12 @@
 
 struct buf_ring_context *init_registered_buffer_ring(struct io_uring *ring, int bgid) {
     struct buf_ring_context *ctx = calloc(1, sizeof(struct buf_ring_context));
-    if (!ctx) return NULL;
+    if (!ctx)
+        return NULL;
 
     size_t ring_size = NUM_BUFFERS * sizeof(struct io_uring_buf);
     size_t data_size = NUM_BUFFERS * BUF_SIZE;
-    
+
     posix_memalign(&ctx->buf_mem, 4096, data_size);
     posix_memalign((void **)&ctx->br, 4096, ring_size);
 
@@ -38,9 +39,9 @@ struct buf_ring_context *init_registered_buffer_ring(struct io_uring *ring, int 
     }
 
     struct io_uring_buf_reg reg = {
-        .ring_addr = (uint64_t)ctx->br,
+        .ring_addr    = (uint64_t)ctx->br,
         .ring_entries = NUM_BUFFERS,
-        .bgid = bgid,
+        .bgid         = bgid,
     };
 
     int ret = io_uring_register_buf_ring(ring, &reg, 0);
@@ -54,16 +55,20 @@ struct buf_ring_context *init_registered_buffer_ring(struct io_uring *ring, int 
     io_uring_buf_ring_init(ctx->br);
     for (int i = 0; i < NUM_BUFFERS; i++) {
         void *buf_addr = (uint8_t *)ctx->buf_mem + (i * BUF_SIZE);
-        io_uring_buf_ring_add(ctx->br, buf_addr, BUF_SIZE, i, io_uring_buf_ring_mask(NUM_BUFFERS), i);
+        io_uring_buf_ring_add(
+            ctx->br,
+            buf_addr,
+            BUF_SIZE,
+            i,
+            io_uring_buf_ring_mask(NUM_BUFFERS),
+            i);
     }
-    
+
     io_uring_buf_ring_advance(ctx->br, NUM_BUFFERS);
     ctx->bgid = bgid;
 
     return ctx;
 }
-
-
 
 static void cleanup_session_if_needed(MachSession *session) {
     if (session->closing && session->pending_writes == 0) {
@@ -76,19 +81,21 @@ static void cleanup_session_if_needed(MachSession *session) {
 
 static void free_write_response(WriteResponse *wr) {
     if (wr) {
-        if (wr->is_dynamic) free(wr);
-        else wr->in_use = false;
+        if (wr->is_dynamic)
+            free(wr);
+        else
+            wr->in_use = false;
     }
 }
 
-static WriteResponse* get_write_response(MachSession *session, size_t resp_len) {
+static WriteResponse *get_write_response(MachSession *session, size_t resp_len) {
     if (resp_len > MAX_WRITE_PAYLOAD) {
         LOGERR("Response length %zu exceeds maximum %d", resp_len, MAX_WRITE_PAYLOAD);
         return NULL;
     }
     for (int i = 0; i < MAX_CONCURRENT_WRITES; i++) {
         if (!session->write_pool[i].in_use) {
-            session->write_pool[i].in_use = true;
+            session->write_pool[i].in_use     = true;
             session->write_pool[i].is_dynamic = false;
             return &session->write_pool[i];
         }
@@ -96,7 +103,7 @@ static WriteResponse* get_write_response(MachSession *session, size_t resp_len) 
     LOGDBG("Write pool exhausted for session, falling back to malloc");
     WriteResponse *wr = malloc(sizeof(WriteResponse));
     if (wr) {
-        wr->in_use = true;
+        wr->in_use     = true;
         wr->is_dynamic = true;
         return wr;
     }
@@ -104,18 +111,20 @@ static WriteResponse* get_write_response(MachSession *session, size_t resp_len) 
 }
 
 static void send_error_uring(MachSession *session, uint32_t sequence_id, AudioErrorCode code) {
-    if (session->closing) return;
-    
+    if (session->closing)
+        return;
+
     size_t const resp_len = sizeof(AudioMsgHeader) + sizeof(struct audio_error_payload);
 
     WriteResponse *wr = get_write_response(session, resp_len);
-    if (!wr) return;
+    if (!wr)
+        return;
 
-    wr->req.op = IO_OP_WRITE;
-    wr->req.fd = session->client_fd;
+    wr->req.op  = IO_OP_WRITE;
+    wr->req.fd  = session->client_fd;
     wr->req.ctx = wr;
     wr->session = session;
-    wr->len = resp_len;
+    wr->len     = resp_len;
 
     AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
     resp_header->magic                = htonl(AUDIO_MAGIC);
@@ -219,11 +228,11 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
 
                 WriteResponse *wr = get_write_response(session, resp_len);
                 if (wr) {
-                    wr->req.op = IO_OP_WRITE;
-                    wr->req.fd = session->client_fd;
+                    wr->req.op  = IO_OP_WRITE;
+                    wr->req.fd  = session->client_fd;
                     wr->req.ctx = wr;
                     wr->session = session;
-                    wr->len = resp_len;
+                    wr->len     = resp_len;
 
                     AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
                     resp_header->magic                = htonl(AUDIO_MAGIC);
@@ -272,16 +281,17 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
             break;
 
         case CMD_PING: {
-            if (session->closing) break;
-            size_t const          resp_len    = sizeof(AudioMsgHeader);
+            if (session->closing)
+                break;
+            size_t const resp_len = sizeof(AudioMsgHeader);
 
             WriteResponse *wr = get_write_response(session, resp_len);
             if (wr) {
-                wr->req.op = IO_OP_WRITE;
-                wr->req.fd = session->client_fd;
+                wr->req.op  = IO_OP_WRITE;
+                wr->req.fd  = session->client_fd;
                 wr->req.ctx = wr;
                 wr->session = session;
-                wr->len = resp_len;
+                wr->len     = resp_len;
 
                 AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
                 resp_header->magic                = htonl(AUDIO_MAGIC);
@@ -305,24 +315,26 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
 
         case CMD_DISCOVER: {
             LOGINF("Received CMD_DISCOVER");
-            if (session->closing) break;
+            if (session->closing)
+                break;
             size_t const resp_len =
                 sizeof(AudioMsgHeader) + sizeof(struct audio_discover_reply_payload);
 
             WriteResponse *wr = get_write_response(session, resp_len);
             if (wr) {
-                wr->req.op = IO_OP_WRITE;
-                wr->req.fd = session->client_fd;
+                wr->req.op  = IO_OP_WRITE;
+                wr->req.fd  = session->client_fd;
                 wr->req.ctx = wr;
                 wr->session = session;
-                wr->len = resp_len;
+                wr->len     = resp_len;
 
                 AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
                 resp_header->magic                = htonl(AUDIO_MAGIC);
                 resp_header->version              = htons(AUDIO_VERSION);
                 resp_header->command              = htons(CMD_DISCOVER_REPLY);
                 resp_header->sequence_id          = htonl(decoded.sequence_id);
-                resp_header->payload_len = htonl((uint32_t)sizeof(struct audio_discover_reply_payload));
+                resp_header->payload_len =
+                    htonl((uint32_t)sizeof(struct audio_discover_reply_payload));
 
                 struct audio_discover_reply_payload *const resp_payload =
                     (struct audio_discover_reply_payload *)(wr->data + sizeof(AudioMsgHeader));
@@ -351,7 +363,13 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
         offset += sizeof(AudioMsgHeader) + decoded.payload_len;
     }
 
-    io_uring_buf_ring_add(session->server->buf_ring->br, buf_base, BUF_SIZE, bid, io_uring_buf_ring_mask(NUM_BUFFERS), 0);
+    io_uring_buf_ring_add(
+        session->server->buf_ring->br,
+        buf_base,
+        BUF_SIZE,
+        bid,
+        io_uring_buf_ring_mask(NUM_BUFFERS),
+        0);
     io_uring_buf_ring_advance(session->server->buf_ring->br, 1);
 }
 
@@ -447,9 +465,9 @@ int mach_server_init(
     // Initialize io_uring
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags = IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF;
+    params.flags         = IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF;
     params.sq_thread_cpu = sq_thread_cpu;
-    int r = io_uring_queue_init_params(QD, &server->ring, &params);
+    int r                = io_uring_queue_init_params(QD, &server->ring, &params);
     if (r == -EINVAL) {
         LOGINF("SQPOLL invalid params, falling back to standard io_uring");
         memset(&params, 0, sizeof(params));
@@ -587,8 +605,8 @@ int mach_server_start(MachServer *const server) {
                         LOGERR("Accept error: %s", strerror(-res));
                     }
                 } else {
-                    int                client_fd = res;
-                    MachSession       *session = NULL;
+                    int          client_fd = res;
+                    MachSession *session   = NULL;
                     if (posix_memalign((void **)&session, 4096, sizeof(MachSession)) != 0) {
                         session = NULL;
                     }
@@ -597,11 +615,11 @@ int mach_server_start(MachServer *const server) {
                         close(client_fd);
                     } else {
                         memset(session, 0, sizeof(MachSession));
-                        session->client_fd     = client_fd;
-                        session->is_tcp        = server->is_tcp;
-                        session->server        = server;
+                        session->client_fd      = client_fd;
+                        session->is_tcp         = server->is_tcp;
+                        session->server         = server;
                         session->pending_writes = 0;
-                        session->closing       = false;
+                        session->closing        = false;
                         arena_init(
                             &session->arena,
                             session->arena_buf,
@@ -638,18 +656,24 @@ int mach_server_start(MachServer *const server) {
 
             case IO_OP_READ: {
                 MachSession *session = (MachSession *)req->ctx;
-                
-                bool has_buffer = (c->flags & IORING_CQE_F_BUFFER) != 0;
-                int bid = -1;
+
+                bool  has_buffer     = (c->flags & IORING_CQE_F_BUFFER) != 0;
+                int   bid            = -1;
                 void *buffer_address = NULL;
                 if (has_buffer) {
-                    bid = c->flags >> IORING_CQE_BUFFER_SHIFT;
+                    bid            = c->flags >> IORING_CQE_BUFFER_SHIFT;
                     buffer_address = (uint8_t *)server->buf_ring->buf_mem + (bid * BUF_SIZE);
                 }
 
                 if (res <= 0) {
                     if (has_buffer) {
-                        io_uring_buf_ring_add(server->buf_ring->br, buffer_address, BUF_SIZE, bid, io_uring_buf_ring_mask(NUM_BUFFERS), 0);
+                        io_uring_buf_ring_add(
+                            server->buf_ring->br,
+                            buffer_address,
+                            BUF_SIZE,
+                            bid,
+                            io_uring_buf_ring_mask(NUM_BUFFERS),
+                            0);
                         io_uring_buf_ring_advance(server->buf_ring->br, 1);
                     }
 
@@ -676,7 +700,7 @@ int mach_server_start(MachServer *const server) {
                     } else {
                         LOGERR("Read succeeded but no buffer was selected!");
                     }
-                    
+
                     if (!(c->flags & IORING_CQE_F_MORE)) {
                         struct io_uring_sqe *r_sqe = io_uring_get_sqe(&server->ring);
                         if (r_sqe) {
@@ -691,10 +715,10 @@ int mach_server_start(MachServer *const server) {
             }
 
             case IO_OP_WRITE: {
-                WriteResponse *wr = (WriteResponse *)req;
-                MachSession *session = wr->session;
+                WriteResponse *wr      = (WriteResponse *)req;
+                MachSession   *session = wr->session;
                 session->pending_writes--;
-                
+
                 if (res < 0) {
                     if (!session->closing) {
                         if (res != -EPIPE && res != -ECONNRESET) {
@@ -704,7 +728,7 @@ int mach_server_start(MachServer *const server) {
                         session->closing = true;
                     }
                 }
-                
+
                 free_write_response(wr);
                 cleanup_session_if_needed(session);
                 break;
@@ -722,7 +746,7 @@ int mach_server_start(MachServer *const server) {
     close(server->signal_fd);
     close(server->listen_fd);
     io_uring_queue_exit(&server->ring);
-    
+
     if (server->buf_ring) {
         free(server->buf_ring->buf_mem);
         free(server->buf_ring->br);

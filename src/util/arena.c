@@ -9,7 +9,13 @@ static inline __attribute__((always_inline)) size_t align_up(size_t const n, siz
     return (n + align - 1) & ~(align - 1);
 }
 
-void arena_init_impl(Arena *const arena, void *const buf, size_t const size, char const *const name, char const *file, int line) {
+void arena_init_impl(
+    Arena *const      arena,
+    void *const       buf,
+    size_t const      size,
+    char const *const name,
+    char const       *file,
+    int               line) {
     (void)file;
     (void)line;
     if (arena == NULL) {
@@ -43,7 +49,8 @@ void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, 
     size_t const aligned_curr = align_up(arena->curr, 8);
     if (aligned_curr + size > arena->size) {
         LOGERR_LOC(
-            file, line,
+            file,
+            line,
             "Arena '%s' out of memory: requested %zu bytes, available %zu bytes",
             arena->name,
             size,
@@ -55,7 +62,8 @@ void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, 
     arena->curr     = aligned_curr + size;
 
     LOGDBG_LOC(
-        file, line,
+        file,
+        line,
         "Arena '%s' allocated %zu bytes, used %zu/%zu bytes",
         arena->name,
         size,

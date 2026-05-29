@@ -31,17 +31,17 @@ typedef struct {
 } IoRequest;
 
 typedef struct {
-    struct io_uring ring;
-    int             listen_fd;
-    int             signal_fd;
-    IoRequest       accept_req;
-    IoRequest       signal_req;
-    char const     *socket_path;
-    char const     *host;
-    int             port;
-    bool            is_tcp;
-    uint32_t        num_workers;
-    bool            running;
+    struct io_uring          ring;
+    int                      listen_fd;
+    int                      signal_fd;
+    IoRequest                accept_req;
+    IoRequest                signal_req;
+    char const              *socket_path;
+    char const              *host;
+    int                      port;
+    bool                     is_tcp;
+    uint32_t                 num_workers;
+    bool                     running;
     struct buf_ring_context *buf_ring;
 } MachServer;
 
@@ -51,12 +51,12 @@ typedef struct MachSession MachSession;
 #define MAX_WRITE_PAYLOAD     8192
 
 typedef struct {
-    IoRequest req;
+    IoRequest    req;
     MachSession *session;
-    size_t len;
-    bool in_use;
-    bool is_dynamic;
-    uint8_t data[MAX_WRITE_PAYLOAD];
+    size_t       len;
+    bool         in_use;
+    bool         is_dynamic;
+    uint8_t      data[MAX_WRITE_PAYLOAD];
 } WriteResponse;
 
 struct MachSession {
