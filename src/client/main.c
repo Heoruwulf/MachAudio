@@ -61,6 +61,10 @@ typedef struct {
     FILE      *output_file;
     FILE      *output_vad_file;
 
+    uint8_t   *read_buf;
+    size_t     read_buf_len;
+    size_t     read_buf_cap;
+
     // Statistics
     uint64_t  total_sent;
     uint64_t  total_received;
@@ -364,9 +368,27 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
     ClientConnection *const conn = (ClientConnection *)stream->data;
 
     if (nread > 0) {
-        // Process protocol output
-        uint8_t const *ptr       = (uint8_t const *)buf->base;
-        ssize_t        remaining = nread;
+        if (conn->read_buf_len + nread > conn->read_buf_cap) {
+            size_t new_cap = conn->read_buf_cap == 0 ? 8192 : conn->read_buf_cap * 2;
+            while (conn->read_buf_len + nread > new_cap) {
+                new_cap *= 2;
+            }
+            uint8_t *new_buf = realloc(conn->read_buf, new_cap);
+            if (new_buf) {
+                conn->read_buf = new_buf;
+                conn->read_buf_cap = new_cap;
+            } else {
+                LOGERR("Failed to allocate read buffer");
+                free(buf->base);
+                return;
+            }
+        }
+
+        memcpy(conn->read_buf + conn->read_buf_len, buf->base, nread);
+        conn->read_buf_len += nread;
+
+        uint8_t const *ptr       = conn->read_buf;
+        ssize_t        remaining = conn->read_buf_len;
 
         while (remaining >= (ssize_t)sizeof(AudioMsgHeader)) {
             AudioMsgHeader header;
@@ -379,8 +401,7 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
             }
 
             if (remaining < (ssize_t)(sizeof(AudioMsgHeader) + header.payload_len)) {
-                // Partial message, should ideally buffer, but for test client we assume small
-                // chunks
+                // Partial message, wait for more data
                 break;
             }
 
@@ -444,6 +465,11 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
             ptr += msg_total;
             remaining -= (ssize_t)msg_total;
         }
+
+        if (remaining < (ssize_t)conn->read_buf_len) {
+            memmove(conn->read_buf, ptr, remaining);
+            conn->read_buf_len = remaining;
+        }
     } else if (nread < 0) {
         if (nread != UV_EOF) {
             LOGERR("Read error: %s", uv_strerror((int)nread));
@@ -472,6 +498,7 @@ static void on_write_completed(uv_write_t *req, int status) {
 static void client_init(uv_loop_t *loop, uv_stream_t *stream) {
     if (g_app.config.host) {
         uv_tcp_init(loop, (uv_tcp_t *)stream);
+        uv_tcp_nodelay((uv_tcp_t *)stream, 1);
     } else {
         uv_pipe_init(loop, (uv_pipe_t *)stream, 0);
     }
