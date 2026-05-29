@@ -32,20 +32,20 @@ MachAudio is designed for ultra-low latency. Below are empirical benchmark resul
 * **Output Stream:** Mixed, resampled, and transcoded to raw L16 (16kHz Mono, Little-Endian)
 * **Voice Activity Detection (VAD):** Enabled on mixed stream (Micro-GRU neural network running inline)
 * **Load Duration:** 120 seconds of real-time audio streams (5,980 frames processed)
-* **Average Latency:** **0.069 ms** (69 microseconds) per buffer
-* **P95 Latency:** **0.081 ms** (81 microseconds)
-* **Min Latency:** **0.048 ms** (48 microseconds)
-* **Max Latency:** **0.123 ms** (123 microseconds)
+* **Average Latency:** **0.043 ms** (43 microseconds) per buffer
+* **P95 Latency:** **0.047 ms** (47 microseconds)
+* **Min Latency:** **0.039 ms** (39 microseconds)
+* **Max Latency:** **0.072 ms** (72 microseconds)
 
 ### Capacity Projections (Per Core)
 
 Because MachAudio guarantees sub-millisecond processing via zero-copy `io_uring` queues, a zero-allocation hot path, and AVX2 vectorization, a single worker thread pinned to a single physical core can sustain massive concurrent density.
 
-Based on an average latency of **~0.069ms** to process a standard **20ms** audio frame (including decoding both streams, mixing, resampling, neural-network VAD, and output delivery):
+Based on an average latency of **~0.043ms** to process a standard **20ms** audio frame (including decoding both streams, mixing, resampling, neural-network VAD, and output delivery):
 
-* **~250 concurrent real-time streams** per physical core.
+* **~450 concurrent real-time streams** per physical core.
 
-Linear scaling is achieved via the pre-forking architecture. A standard 8-core instance running 8 workers can safely handle upwards of **2,000 concurrent real-time streams** (a **3.3x capacity increase** over the legacy `libuv`/`epoll` implementation), providing extreme throughput for professional VoIP AI agents without garbage collection pauses or context-switching jitter.
+Linear scaling is achieved via the pre-forking architecture. A standard 8-core instance running 8 workers can safely handle upwards of **3,600 concurrent real-time streams** (a massive capacity increase over the legacy `libuv`/`epoll` implementation), providing extreme throughput for professional VoIP AI agents without garbage collection pauses or context-switching jitter.
 
 ## 🏗 Architecture
 

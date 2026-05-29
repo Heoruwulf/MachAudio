@@ -5,12 +5,65 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sched.h>
+#include <string.h>
+#include <errno.h>
 #include "machaudio/log.h"
 #include "machaudio/os_tune.h"
 #include "machaudio/server.h"
 
 #define DEFAULT_SOCKET_DIR  "/tmp"
 #define DEFAULT_SOCKET_NAME "machaudio"
+
+// Supervisory logic to identify and tune the kernel SQPOLL thread
+static void tune_sqpoll_thread(pid_t worker_pid, int rt_priority, int core) {
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/task", worker_pid);
+    
+    for (int attempt = 0; attempt < 10; attempt++) {
+        DIR *dir = opendir(path);
+        if (!dir) return;
+
+        bool found = false;
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (ent->d_name[0] == '.') continue;
+            
+            char comm_path[1024];
+            snprintf(comm_path, sizeof(comm_path), "%s/%s/comm", path, ent->d_name);
+            FILE *f = fopen(comm_path, "r");
+            if (f) {
+                char comm[256] = {0};
+                if (fgets(comm, sizeof(comm), f)) {
+                    if (strncmp(comm, "iou-sqp", 7) == 0) {
+                        pid_t tid = atoi(ent->d_name);
+                        LOGINF("Found SQPOLL thread %d for worker %d, tuning...", tid, worker_pid);
+                        
+                        if (rt_priority > 0) {
+                            struct sched_param sp = { .sched_priority = rt_priority };
+                            if (sched_setscheduler(tid, SCHED_FIFO, &sp) < 0) {
+                                LOGERR("Failed to set SCHED_FIFO for SQPOLL thread %d: %s", tid, strerror(errno));
+                            }
+                        }
+                        
+                        cpu_set_t cpuset;
+                        CPU_ZERO(&cpuset);
+                        CPU_SET(core, &cpuset);
+                        if (sched_setaffinity(tid, sizeof(cpu_set_t), &cpuset) < 0) {
+                            LOGERR("Failed to set CPU affinity for SQPOLL thread %d: %s", tid, strerror(errno));
+                        }
+                        found = true;
+                    }
+                }
+                fclose(f);
+            }
+        }
+        closedir(dir);
+        if (found) break;
+        usleep(50000); // 50ms wait
+    }
+}
 
 static void print_usage(char const *const prog) {
     fprintf(stderr, "Usage: %s [options]\n", prog);
@@ -50,7 +103,7 @@ int run_worker(
     int        r;
 
     if (host) {
-        r = mach_server_init(&server, NULL, host, base_port + worker_index, num_workers);
+        r = mach_server_init(&server, NULL, host, base_port + worker_index, num_workers, base_core + worker_index);
     } else {
         snprintf(
             socket_path,
@@ -59,7 +112,7 @@ int run_worker(
             uds_dir,
             DEFAULT_UDS_NAME,
             worker_index);
-        r = mach_server_init(&server, socket_path, NULL, 0, num_workers);
+        r = mach_server_init(&server, socket_path, NULL, 0, num_workers, base_core + worker_index);
     }
 
     if (r != 0) {
@@ -135,9 +188,14 @@ int main(int argc, char **argv) {
             return 0;
         default:
             print_usage(argv[0]);
-            return 1;
         }
     }
+
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    sigprocmask(SIG_BLOCK, &mask, NULL);
 
     LOGINF("MachAudio Supervisor Service Starting...");
 #ifdef __AVX2__
@@ -173,6 +231,11 @@ int main(int argc, char **argv) {
     }
 
     LOGINF("Supervisor process with %d workers", num_workers);
+
+    for (int i = 0; i < num_workers; i++) {
+        tune_sqpoll_thread(worker_pids[i], rt_priority, cpu_core + i);
+    }
+
     int active_workers = num_workers;
     while (active_workers > 0) {
         int   status;
