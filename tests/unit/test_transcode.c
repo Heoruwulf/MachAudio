@@ -268,39 +268,3 @@ void test_resample_48k_to_16k_snr(void) {
     double const snr = audio_calc_snr(reference, out_buf, out_samples);
     TEST_ASSERT_TRUE(snr > 20.0);
 }
-
-void test_opus_roundtrip_snr(void) {
-    TranscodeSession           session;
-    struct audio_start_payload config = {
-        .in_payload_type  = CODEC_OPUS,
-        .in_channels      = 1,
-        .in_sample_rate   = htonl(48000),
-        .out_payload_type = CODEC_OPUS,
-        .out_channels     = 1,
-        .out_sample_rate  = htonl(48000)};
-    int r = transcode_session_init(&session, &config);
-    if (r != 0) {
-        TEST_IGNORE_MESSAGE("Opus not supported or init failed");
-        return;
-    }
-
-    size_t const samples = 960;
-    int16_t      original[960];
-    uint8_t      encoded[1000];
-    int16_t      decoded[960];
-
-    audio_gen_sine(original, samples, 1000.0, 48000.0, 10000.0);
-
-    int encoded_len = transcode_l16_to_opus(&session, original, samples, encoded, 1000);
-    TEST_ASSERT_TRUE(encoded_len > 0);
-
-    int decoded_samples = transcode_opus_to_l16(&session, encoded, encoded_len, decoded);
-    TEST_ASSERT_TRUE(decoded_samples > 0);
-
-    int16_t out_val = 0;
-    for (size_t i = 0; i < (size_t)decoded_samples; i++)
-        out_val |= decoded[i];
-    TEST_ASSERT_TRUE(out_val != 0);
-
-    transcode_session_stop(&session);
-}

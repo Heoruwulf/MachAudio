@@ -1,14 +1,12 @@
 #ifndef MACHAUDIO_AUDIO_H
 #define MACHAUDIO_AUDIO_H
 
-#include <opus/opus.h>
 #include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
-    OpusDecoder *decoder;
-    int          channels;
-    int          sample_rate;
+    int channels;
+    int sample_rate;
 } MachAudioEngine;
 
 /**
@@ -18,7 +16,7 @@ int audio_engine_init(MachAudioEngine *const engine, int const sample_rate, int 
 
 /**
  * Processes a chunk of audio data.
- * For now, this is a stub that might just decode Opus if requested.
+ * For now, this is a stub.
  */
 int audio_engine_process(
     MachAudioEngine *const engine,

@@ -10,12 +10,10 @@ add_library(machaudio_core STATIC ${CORE_SOURCES})
 target_include_directories(machaudio_core PUBLIC 
     ${CMAKE_SOURCE_DIR}/include
     ${LIBURING_INCLUDE_DIRS}
-    ${OPUS_INCLUDE_DIRS}
 )
 
 target_link_libraries(machaudio_core PRIVATE 
     ${LIBURING_LIBRARIES}
-    ${OPUS_LIBRARIES}
 )
 
 # Main Executable

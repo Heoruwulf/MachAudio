@@ -101,8 +101,7 @@ static char const *get_codec_extension(uint8_t format) {
         return "alaw";
     case 96:
         return "l16";
-    case 111:
-        return "opus";
+
     default:
         return "raw";
     }
@@ -118,7 +117,7 @@ static void print_usage(char const *prog) {
     printf("  -i, --input <file>        Input raw PCM file (required)\n");
     printf("  -j, --input2 <file>       Second input file for mixing\n");
     printf("  -w, --write-output        Write raw output to file\n");
-    printf("  -f, --format <type>       Input format (0=ulaw, 8=alaw, 96=l16, 111=opus)\n");
+    printf("  -f, --format <type>       Input format (0=ulaw, 8=alaw, 96=l16)\n");
     printf("  -r, --rate <hz>           Input sample rate (default: %d)\n", DEFAULT_RATE);
     printf("  -c, --channels <num>      Channel count (default: %d)\n", DEFAULT_CHANNELS);
     printf("  -e, --in-endian <num>     Input endianness (0=none, 1=LE, 2=BE, default: 1)\n");
