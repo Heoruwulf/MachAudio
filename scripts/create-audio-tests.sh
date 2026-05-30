@@ -19,6 +19,8 @@ Outputs generated:
   - PCMA / G.711 a-law  (8kHz, Mono)
   - L16                 (48kHz, Mono, Little-Endian)
   - L16                 (48kHz, Mono, Big-Endian)
+  - L16                 (16kHz, Mono, Little-Endian)
+  - L16                 (16kHz, Mono, Big-Endian)
 
 Output format: input_<filename>_<sample_rate>_<le|be>.<ext>
 EOF
@@ -79,6 +81,22 @@ OUT_L16_BE="input_${FILENAME}_48000_be.l16"
 echo "  -> Generating $OUT_L16_BE"
 ffmpeg -v error -y -i "$INPUT_FILE" \
     -f s16be -acodec pcm_s16be -ar 48000 -ac 1 \
+    "$OUT_L16_BE"
+
+# 5. L16 (Linear PCM 16-bit) - 16kHz Mono, Little-Endian
+# FFmpeg format: s16le, codec: pcm_s16le
+OUT_L16_LE="input_${FILENAME}_16000_le.l16"
+echo "  -> Generating $OUT_L16_LE"
+ffmpeg -v error -y -i "$INPUT_FILE" \
+    -f s16le -acodec pcm_s16le -ar 16000 -ac 1 \
+    "$OUT_L16_LE"
+
+# 6. L16 (Linear PCM 16-bit) - 16kHz Mono, Big-Endian
+# FFmpeg format: s16be, codec: pcm_s16be
+OUT_L16_BE="input_${FILENAME}_16000_be.l16"
+echo "  -> Generating $OUT_L16_BE"
+ffmpeg -v error -y -i "$INPUT_FILE" \
+    -f s16be -acodec pcm_s16be -ar 16000 -ac 1 \
     "$OUT_L16_BE"
 
 echo "Done."
