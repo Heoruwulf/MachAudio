@@ -13,8 +13,8 @@
 #define DEFAULT_UDS_NAME "machaudio"
 
 #define BGID_READ_RING 1
-#define NUM_BUFFERS    128
-#define BUF_SIZE       262144
+#define NUM_BUFFERS    16384
+#define BUF_SIZE       16384
 
 struct buf_ring_context {
     struct io_uring_buf_ring *br;
@@ -72,6 +72,9 @@ struct MachSession {
     MachServer      *server;
     int              pending_writes;
     bool             closing;
+    bool             recv_active;
+    uint8_t          assemble_buf[32768];
+    size_t           assemble_len;
 };
 
 /**
