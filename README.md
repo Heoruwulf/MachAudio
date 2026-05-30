@@ -118,6 +118,20 @@ You can start the daemon with standard privileges, or use the CLI flags to spawn
 * `-P, --port <P>`: The starting TCP port (default: 8000).
 * `-D, --uds-dir <dir>`: Directory for Unix Domain Sockets (default: `/tmp`).
 * `-L, --fd-limit <N>`: Set the maximum open file descriptors limit (`RLIMIT_NOFILE`) for the daemon (default: 4096).
+* `-v, --vad-data <path>`: Custom VAD training data file to load on startup, overriding the built-in dataset.
+
+### Environment Variable Configuration
+
+All command-line switches can be globally configured using environment variables prefixed with `MACH_`. Command-line arguments take precedence over environment variables.
+For a complete template, see the `env.sample` file included in the project root.
+
+* `MACH_CORE_MASK` (Overrides `-c`)
+* `MACH_RT_PRIORITY` (Overrides `-p`)
+* `MACH_HOST` (Overrides `-H`)
+* `MACH_PORT` (Overrides `-P`)
+* `MACH_UDS_DIR` (Overrides `-D`)
+* `MACH_FD_LIMIT` (Overrides `-L`)
+* `MACH_VAD_DATA` (Overrides `-v`)
 
 **How Worker Topology & Core Pinning Works:**
 

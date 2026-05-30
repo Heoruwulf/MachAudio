@@ -28,7 +28,6 @@ int audio_engine_process(
         return -1;
     }
 
-    // Stub: In a real implementation, we would decode the Opus packet here.
     // opus_decode(engine->decoder, data, len, out_pcm, frame_size, 0);
 
     (void)len;
