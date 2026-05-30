@@ -46,7 +46,7 @@ typedef struct {
 
 // CMD_START payload (16 bytes, aligned)
 struct audio_start_payload {
-    uint8_t  in_payload_type; // e.g., 0 (PCMU), 8 (PCMA), 96 (L16), 111 (Opus)
+    uint8_t  in_payload_type; // e.g., 0 (PCMU), 8 (PCMA), 96 (L16)
     uint8_t  in_channels;     // 1 or 2
     uint16_t flags;           // AUDIO_START_FLAGS_*
     uint32_t in_sample_rate;  // e.g., 8000, 16000

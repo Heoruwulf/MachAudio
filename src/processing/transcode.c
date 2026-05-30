@@ -63,43 +63,12 @@ int transcode_session_init(
         }
     }
 
-    // Initialize Opus if needed
-    int opus_err = OPUS_OK;
-    if (session->in_payload_type == CODEC_OPUS) {
-        session->opus_decoder =
-            opus_decoder_create((int)session->in_sample_rate, (int)session->in_channels, &opus_err);
-        if (opus_err != OPUS_OK)
-            return -1;
-    }
-
-    if (session->out_payload_type == CODEC_OPUS) {
-        session->opus_encoder = opus_encoder_create(
-            (int)session->out_sample_rate,
-            (int)session->out_channels,
-            OPUS_APPLICATION_VOIP,
-            &opus_err);
-        if (opus_err != OPUS_OK) {
-            if (session->opus_decoder)
-                opus_decoder_destroy(session->opus_decoder);
-            return -1;
-        }
-    }
-
     return 0;
 }
 
 void transcode_session_stop(TranscodeSession *const session) {
     if (unlikely(session == NULL)) {
         return;
-    }
-
-    if (session->opus_decoder) {
-        opus_decoder_destroy(session->opus_decoder);
-        session->opus_decoder = NULL;
-    }
-    if (session->opus_encoder) {
-        opus_encoder_destroy(session->opus_encoder);
-        session->opus_encoder = NULL;
     }
 
     memset(session, 0, sizeof(TranscodeSession));
@@ -150,17 +119,7 @@ int audio_process_transcode(
         int16_t *decode_buf     = NULL;
         size_t   decode_samples = 0;
 
-        if (session->in_payload_type == CODEC_OPUS) {
-            size_t const max_samples = 5760; // Opus max (120ms at 48k)
-            decode_buf =
-                arena_alloc(out_arena, max_samples * session->in_channels * sizeof(int16_t));
-            if (!decode_buf)
-                return -1;
-            int const decoded = transcode_opus_to_l16(session, in_data, in_data_len, decode_buf);
-            if (decoded < 0)
-                continue;
-            decode_samples = (size_t)decoded;
-        } else if (session->in_payload_type == CODEC_PCMU) {
+        if (session->in_payload_type == CODEC_PCMU) {
             decode_samples = in_data_len;
             decode_buf     = arena_alloc(out_arena, decode_samples * sizeof(int16_t));
             if (!decode_buf)
@@ -241,18 +200,7 @@ int audio_process_transcode(
             (int)session->out_channels);
     }
 
-    // 3. Encode / Prepare Output
-    if (session->out_payload_type == CODEC_OPUS) {
-        uint8_t *const opus_out = arena_alloc(out_arena, 4000);
-        if (!opus_out)
-            return -1;
-        int const encoded_bytes =
-            transcode_l16_to_opus(session, resampled_buf, resampled_samples, opus_out, 4000);
-        if (encoded_bytes < 0)
-            return -1;
-        memmove((uint8_t *)out_arena->buf + initial_curr, opus_out, (size_t)encoded_bytes);
-        out_arena->curr = initial_curr + (size_t)encoded_bytes;
-    } else if (session->out_payload_type == CODEC_PCMU) {
+    if (session->out_payload_type == CODEC_PCMU) {
         size_t const   out_len  = resampled_samples;
         uint8_t *const pcmu_out = arena_alloc(out_arena, out_len);
         if (!pcmu_out)

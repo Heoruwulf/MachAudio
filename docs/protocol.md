@@ -34,7 +34,7 @@ Initializes a processing session with specific codec and sample rate parameters.
 
 | Offset | Type | Field | Description |
 | :--- | :--- | :--- | :--- |
-| 0 | `uint8` | `in_pt` | Input Payload Type (0=PCMU, 8=PCMA, 96=L16, 111=Opus) |
+| 0 | `uint8` | `in_pt` | Input Payload Type (0=PCMU, 8=PCMA, 96=L16) |
 | 1 | `uint8` | `in_ch` | Input Channels (1=Mono, 2=Stereo) |
 | 2 | `uint16` | `flags` | Session Feature Flags (Bit 0 / `0x0001` = VAD enabled) |
 | 4 | `uint32` | `in_rate` | Input Sample Rate (e.g., 8000, 16000, 48000) |

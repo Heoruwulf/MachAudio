@@ -19,7 +19,6 @@ client-tests/
 *.l16
 *.mulaw
 *.alaw
-*.opus
 *.raw
 assets/
 

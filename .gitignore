@@ -48,7 +48,6 @@ client-tests/
 *.mulaw
 *.alaw
 *.l16
-*.opus
 *.ogg
 *.flac
 *.mp3

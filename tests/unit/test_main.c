@@ -26,7 +26,6 @@ extern void test_resample_8k_to_48k_snr(void);
 extern void test_resample_16k_to_48k_snr(void);
 extern void test_resample_44k_to_48k_snr(void);
 extern void test_resample_48k_to_16k_snr(void);
-extern void test_opus_roundtrip_snr(void);
 
 extern void test_resample_adv_48k_to_48k_snr(void);
 extern void test_resample_adv_streaming(void);
@@ -77,7 +76,6 @@ int main(void) {
     RUN_TEST(test_resample_16k_to_48k_snr);
     RUN_TEST(test_resample_44k_to_48k_snr);
     RUN_TEST(test_resample_48k_to_16k_snr);
-    RUN_TEST(test_opus_roundtrip_snr);
 
     RUN_TEST(test_resample_adv_48k_to_48k_snr);
     RUN_TEST(test_resample_adv_streaming);
