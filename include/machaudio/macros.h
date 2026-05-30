@@ -19,4 +19,17 @@ static inline uint64_t mach_hrtime(void) {
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
+#include <stdlib.h>
+
+/**
+ * Gets an environment variable and returns NULL if it is unset or an empty string.
+ */
+static inline char const *mach_getenv(char const *name) {
+    char const *val = getenv(name);
+    if (val && val[0] == '\0') {
+        return NULL;
+    }
+    return val;
+}
+
 #endif // MACHAUDIO_MACROS_H

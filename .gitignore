@@ -57,3 +57,6 @@ assets/
 
 test-*.sh
 test*.svg
+
+*.dat
+*.f32

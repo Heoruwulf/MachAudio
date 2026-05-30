@@ -10,8 +10,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "machaudio/log.h"
+#include "machaudio/macros.h"
 #include "machaudio/os_tune.h"
 #include "machaudio/server.h"
+#include "processing/vad_training_loader.h"
 
 #define DEFAULT_SOCKET_DIR  "/tmp"
 #define DEFAULT_SOCKET_NAME "machaudio"
@@ -87,6 +89,7 @@ static void print_usage(char const *const prog) {
     fprintf(stderr, "  -P, --port <N>        TCP base port (default: 8000)\n");
     fprintf(stderr, "  -D, --uds-dir <dir>   Directory for UDS sockets (default: /tmp)\n");
     fprintf(stderr, "  -L, --fd-limit <N>    Set max open files limit (default: 4096)\n");
+    fprintf(stderr, "  -v, --vad-data <path> Custom VAD training data file (overrides env var)\n");
     fprintf(stderr, "  -h, --help            Show this help message\n");
 }
 
@@ -226,13 +229,36 @@ int main(int argc, char **argv) {
     // closed abruptly
     signal(SIGPIPE, SIG_IGN);
 
-    char const *core_mask_str = NULL;
-    int         rt_priority   = -1;
-    int         fd_limit      = 4096;
+    char const *core_mask_str = mach_getenv("MACH_CORE_MASK");
+
+    int         rt_priority = -1;
+    char const *rt_env      = mach_getenv("MACH_RT_PRIORITY");
+    if (rt_env)
+        rt_priority = atoi(rt_env);
+
+    int         fd_limit = 4096;
+    char const *fd_env   = mach_getenv("MACH_FD_LIMIT");
+    if (fd_env)
+        fd_limit = atoi(fd_env);
+
     char        host_buf[256] = {0};
-    char const *host          = NULL;
-    int         base_port     = 8000;
-    char const *uds_dir       = DEFAULT_SOCKET_DIR;
+    char const *host          = mach_getenv("MACH_HOST");
+    if (host) {
+        strncpy(host_buf, host, sizeof(host_buf) - 1);
+        host_buf[sizeof(host_buf) - 1] = '\0';
+        host                           = host_buf;
+    }
+
+    int         base_port = 8000;
+    char const *port_env  = mach_getenv("MACH_PORT");
+    if (port_env)
+        base_port = atoi(port_env);
+
+    char const *uds_dir = mach_getenv("MACH_UDS_DIR");
+    if (!uds_dir)
+        uds_dir = DEFAULT_SOCKET_DIR;
+
+    char const *vad_path = mach_getenv("MACH_VAD_DATA");
 
     static struct option const long_options[] = {
         {"core-mask", required_argument, 0, 'c'},
@@ -241,11 +267,12 @@ int main(int argc, char **argv) {
         {"port", required_argument, 0, 'P'},
         {"uds-dir", required_argument, 0, 'D'},
         {"fd-limit", required_argument, 0, 'L'},
+        {"vad-data", required_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}};
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "c:p:H:P:D:L:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:H:P:D:L:v:h", long_options, NULL)) != -1) {
         switch (opt) {
         case 'c':
             core_mask_str = optarg;
@@ -266,6 +293,9 @@ int main(int argc, char **argv) {
             break;
         case 'L':
             fd_limit = atoi(optarg);
+            break;
+        case 'v':
+            vad_path = optarg;
             break;
         case 'h':
             print_usage(argv[0]);
@@ -318,6 +348,9 @@ int main(int argc, char **argv) {
 #endif
     os_set_fd_limit(fd_limit);
 
+    // Environment variable is already loaded; args override it.
+    VadTrainingData vad_data = vad_training_data_load(vad_path);
+
     pid_t *worker_pids = calloc((size_t)num_workers, sizeof(pid_t));
     if (!worker_pids)
         return 1;
@@ -334,6 +367,7 @@ int main(int argc, char **argv) {
                 base_port,
                 uds_dir,
                 (uint32_t)num_workers);
+            vad_training_data_free(&vad_data);
             free(worker_pids);
             free(cores);
             exit(r);
@@ -361,6 +395,7 @@ int main(int argc, char **argv) {
     }
 
     LOGINF("All workers finished. Supervisor exiting.");
+    vad_training_data_free(&vad_data);
     free(worker_pids);
     free(cores);
     return 0;
