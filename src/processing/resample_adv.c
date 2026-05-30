@@ -65,26 +65,15 @@ static inline void mac_downsample_avx2(
     double const  ratio,
     int64_t const step_fp) {
 
-    double const inv_s      = ratio;
     double const s          = 1.0 / ratio;
     double const step       = s;
     int const    center_off = (SINC_TAPS / 2) - 1;
 
-    __m256 const  v_inv_s     = _mm256_set1_ps((float)inv_s);
-    __m256 const  v_center    = _mm256_set1_ps((float)center_off);
-    __m256 const  v_phases    = _mm256_set1_ps((float)SINC_PHASES);
-    __m256i const v_phases_m1 = _mm256_set1_epi32(SINC_PHASES - 1);
-    __m256 const  v_step      = _mm256_set1_ps((float)step);
-    __m256 const  v_offsets   = _mm256_setr_ps(0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f);
-    __m256 const  v_norm      = _mm256_set1_ps((float)ratio / 32767.0f);
-
-    int16_t const *const base_ptr = &SINC_COEFFS[0][0];
+    __m256 const v_norm = _mm256_set1_ps((float)ratio / 32767.0f);
 
     for (size_t i = 0; i < count; ++i) {
         int64_t const pos_fp = r->pos_fp;
         double const  t0 = (double)(pos_fp >> 32) + (double)(pos_fp & 0xFFFFFFFF) / 4294967296.0;
-        __m256 const  v_t =
-            _mm256_add_ps(_mm256_set1_ps((float)t0), _mm256_mul_ps(v_offsets, v_step));
 
         double const t7        = t0 + 7.0 * step;
         int const    k_min_all = (int)ceil(t0 - s * (double)center_off);
@@ -92,56 +81,44 @@ static inline void mac_downsample_avx2(
 
         __m256 v_acc = _mm256_setzero_ps();
 
-        for (int k = k_min_all; k <= k_max_all; ++k) {
-            __m256 const v_k = _mm256_set1_ps((float)k);
-            __m256 const v_val_idx =
-                _mm256_add_ps(_mm256_mul_ps(_mm256_sub_ps(v_t, v_k), v_inv_s), v_center);
+#define LOOP_BODY(GET_SAMPLE)                                                                      \
+    do {                                                                                           \
+        double const val_idx0 = (t0 - (double)k) * ratio + (double)center_off;                     \
+        int const    j0       = (int)floor(val_idx0);                                              \
+        double const alpha0   = val_idx0 - (double)j0;                                             \
+        int          pp       = (int)(alpha0 * (double)SINC_PHASES);                               \
+        if (unlikely(pp >= SINC_PHASES))                                                           \
+            pp = SINC_PHASES - 1;                                                                  \
+        else if (unlikely(pp < 0))                                                                 \
+            pp = 0;                                                                                \
+        __m128i v_c16_load;                                                                        \
+        if (unlikely(j0 < 0 || j0 > SINC_TAPS - 8)) {                                              \
+            alignas(16) int16_t tmp[8];                                                            \
+            for (int m = 0; m < 8; ++m) {                                                          \
+                int const j_m = j0 + m;                                                            \
+                tmp[m]        = (j_m >= 0 && j_m < SINC_TAPS) ? SINC_COEFFS[pp][j_m] : 0;          \
+            }                                                                                      \
+            v_c16_load = _mm_load_si128((__m128i const *)tmp);                                     \
+        } else {                                                                                   \
+            v_c16_load = _mm_loadu_si128((__m128i const *)&SINC_COEFFS[pp][j0]);                   \
+        }                                                                                          \
+        __m256i const v_c32  = _mm256_cvtepi16_epi32(v_c16_load);                                  \
+        __m256 const  v_c_ps = _mm256_cvtepi32_ps(v_c32);                                          \
+        int16_t const sample = GET_SAMPLE;                                                         \
+        v_acc                = _mm256_fmadd_ps(_mm256_set1_ps((float)sample), v_c_ps, v_acc);      \
+    } while (0)
 
-            __m256 const  v_jf = _mm256_floor_ps(v_val_idx);
-            __m256i const v_j  = _mm256_cvtps_epi32(v_jf);
-
-            // Mask for j in [0, 127]
-            __m256i const v_mask = _mm256_and_si256(
-                _mm256_cmpgt_epi32(v_j, _mm256_set1_epi32(-1)),
-                _mm256_cmpgt_epi32(_mm256_set1_epi32(SINC_TAPS), v_j));
-
-            __m256 const  v_alpha = _mm256_sub_ps(v_val_idx, v_jf);
-            __m256i const v_pp =
-                _mm256_cvtps_epi32(_mm256_floor_ps(_mm256_mul_ps(v_alpha, v_phases)));
-            __m256i const v_pp_clamped =
-                _mm256_max_epi32(_mm256_setzero_si256(), _mm256_min_epi32(v_pp, v_phases_m1));
-
-            // Ensure j is also clamped for safe gathering, even if masked out later
-            __m256i const v_j_clamped = _mm256_max_epi32(
-                _mm256_setzero_si256(),
-                _mm256_min_epi32(v_j, _mm256_set1_epi32(SINC_TAPS - 1)));
-
-            // Index = (pp * 128 + j_clamped) * 2
-            __m256i const v_idx = _mm256_slli_epi32(
-                _mm256_add_epi32(_mm256_slli_epi32(v_pp_clamped, 7), v_j_clamped),
-                1);
-
-            // Gather 8 coefficients (read 32-bit, sign-extend lower 16-bit)
-            __m256i const v_c32 = _mm256_i32gather_epi32((int const *)base_ptr, v_idx, 1);
-            __m256i const v_c16 = _mm256_srai_epi32(_mm256_slli_epi32(v_c32, 16), 16);
-
-            int16_t sample;
-            if (unlikely(k < 0)) {
-                sample = r->delay_buf[RESAMPLER_MAX_TAPS + k < 0 ? 0 : RESAMPLER_MAX_TAPS + k];
-            } else if (unlikely(k >= (int)in_samples)) {
-                sample = in_data[in_samples - 1];
-            } else {
-                sample = in_data[k];
-            }
-
-            __m256 const v_in   = _mm256_set1_ps((float)sample);
-            __m256       v_prod = _mm256_mul_ps(v_in, _mm256_cvtepi32_ps(v_c16));
-
-            // Apply mask
-            v_prod = _mm256_and_ps(v_prod, _mm256_castsi256_ps(v_mask));
-
-            v_acc = _mm256_add_ps(v_acc, v_prod);
+        int k = k_min_all;
+        for (; k < 0 && k <= k_max_all; ++k) {
+            LOOP_BODY(r->delay_buf[RESAMPLER_MAX_TAPS + k < 0 ? 0 : RESAMPLER_MAX_TAPS + k]);
         }
+        for (; k < (int)in_samples && k <= k_max_all; ++k) {
+            LOOP_BODY(in_data[k]);
+        }
+        for (; k <= k_max_all; ++k) {
+            LOOP_BODY(in_data[in_samples - 1]);
+        }
+#undef LOOP_BODY
 
         v_acc = _mm256_mul_ps(v_acc, v_norm);
 
