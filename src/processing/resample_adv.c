@@ -216,18 +216,26 @@ size_t resample_l16_advanced(
                 dacc /= 32767.0;
 #endif
             } else {
+                alignas(32) int16_t pad_buf[SINC_TAPS];
                 for (int j = 0; j < SINC_TAPS; ++j) {
                     int const k = (int)idx - center_off + j;
-                    int16_t   sample;
                     if (k < 0) {
-                        sample = r->delay_buf[RESAMPLER_MAX_TAPS + k];
+                        pad_buf[j] = r->delay_buf[RESAMPLER_MAX_TAPS + k];
                     } else if (k >= (int)in_samples) {
-                        sample = in_data[in_samples - 1];
+                        pad_buf[j] = in_data[in_samples - 1];
                     } else {
-                        sample = in_data[k];
+                        pad_buf[j] = in_data[k];
                     }
-                    dacc += (double)sample * ((double)coeffs[j] / 32767.0);
                 }
+#ifdef __AVX2__
+                float const acc = mac_128_taps_avx2(pad_buf, coeffs);
+                dacc            = (double)acc / 32767.0;
+#else
+                for (int j = 0; j < SINC_TAPS; ++j) {
+                    dacc += (double)pad_buf[j] * (double)coeffs[j];
+                }
+                dacc /= 32767.0;
+#endif
             }
         } else {
             // Downsampling path: Direct Convolution with stretched kernel
