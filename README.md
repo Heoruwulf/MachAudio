@@ -28,14 +28,14 @@ MachAudio is designed for ultra-low latency. Below are empirical benchmark resul
 
 **Test Scenario: Real-Time Two-Stream Mixing, Transcoding & Voice Activity Detection (UDS Mix)**
 
-* **Input Streams:** 2 parallel input streams of G.711 mu-law (8kHz Mono, ptime 20ms)
+* **Input Streams:** 450 concurrent connections, each sending 2 parallel input streams of G.711 mu-law (8kHz Mono, ptime 20ms)
 * **Output Stream:** Mixed, resampled, and transcoded to raw L16 (16kHz Mono, Little-Endian)
 * **Voice Activity Detection (VAD):** Enabled on mixed stream (Micro-GRU neural network running inline)
-* **Load Duration:** 120 seconds of real-time audio streams (5,980 frames processed)
-* **Average Latency:** **0.043 ms** (43 microseconds) per buffer
+* **Load Duration:** 120 seconds of real-time audio streams (processing 826 MB input / 1.6 GB output)
+* **Average Latency:** **0.042 ms** (42 microseconds) per buffer
 * **P95 Latency:** **0.047 ms** (47 microseconds)
-* **Min Latency:** **0.039 ms** (39 microseconds)
-* **Max Latency:** **0.072 ms** (72 microseconds)
+* **Min Latency:** **0.038 ms** (38 microseconds)
+* **Max Latency:** **0.351 ms** (351 microseconds)
 
 ### Capacity Projections (Per Core)
 

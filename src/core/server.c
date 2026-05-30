@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,7 +19,17 @@
 #include <time.h>
 #include <unistd.h>
 
-#define QD 256
+#define QD 4096
+
+static struct io_uring_sqe *safe_get_sqe(struct io_uring *ring) {
+    struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+    while (!sqe) {
+        io_uring_submit(ring);
+        sched_yield();
+        sqe = io_uring_get_sqe(ring);
+    }
+    return sqe;
+}
 
 struct buf_ring_context *init_registered_buffer_ring(struct io_uring *ring, int bgid) {
     struct buf_ring_context *ctx = calloc(1, sizeof(struct buf_ring_context));
@@ -72,10 +83,15 @@ struct buf_ring_context *init_registered_buffer_ring(struct io_uring *ring, int 
 
 static void cleanup_session_if_needed(MachSession *session) {
     if (session->closing && session->pending_writes == 0) {
-        close(session->client_fd);
-        transcode_session_stop(&session->transcode_session);
-        audio_engine_destroy(&session->audio_engine);
-        free(session);
+        if (session->client_fd != -1) {
+            close(session->client_fd);
+            session->client_fd = -1;
+        }
+        if (!session->recv_active) {
+            transcode_session_stop(&session->transcode_session);
+            audio_engine_destroy(&session->audio_engine);
+            free(session);
+        }
     }
 }
 
@@ -137,7 +153,7 @@ static void send_error_uring(MachSession *session, uint32_t sequence_id, AudioEr
         (struct audio_error_payload *)(wr->data + sizeof(AudioMsgHeader));
     resp_payload->error_code = htonl((uint32_t)code);
 
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&session->server->ring);
+    struct io_uring_sqe *sqe = safe_get_sqe(&session->server->ring);
     if (sqe) {
         io_uring_prep_send(sqe, session->client_fd, wr->data, resp_len, 0);
         io_uring_sqe_set_data(sqe, &wr->req);
@@ -149,25 +165,35 @@ static void send_error_uring(MachSession *session, uint32_t sequence_id, AudioEr
 }
 
 static void process_client_read(MachSession *session, int nread, void *buf_base, int bid) {
-    int offset = 0;
+    if (session->assemble_len + nread > sizeof(session->assemble_buf)) {
+        LOGERR("Assemble buffer overflow on fd %d! Disconnecting.", session->client_fd);
+        session->closing = true;
+        goto return_buffer;
+    }
 
-    while (nread - offset >= (int)sizeof(AudioMsgHeader)) {
-        AudioMsgHeader *header  = (AudioMsgHeader *)((uint8_t *)buf_base + offset);
+    memcpy(session->assemble_buf + session->assemble_len, buf_base, nread);
+    session->assemble_len += nread;
+
+    size_t offset = 0;
+
+    while (session->assemble_len - offset >= sizeof(AudioMsgHeader)) {
+        AudioMsgHeader *header  = (AudioMsgHeader *)(session->assemble_buf + offset);
         AudioMsgHeader  decoded = *header;
         protocol_decode_header(&decoded);
 
         if (!protocol_validate_header(&decoded)) {
             LOGERR("Invalid protocol header received");
             send_error_uring(session, decoded.sequence_id, ERR_INVALID_MAGIC);
+            session->closing = true;
             break;
         }
 
-        if (nread - offset < (int)(sizeof(AudioMsgHeader) + decoded.payload_len)) {
-            // Partial message, cannot process (buffer boundary split)
+        if (session->assemble_len - offset < sizeof(AudioMsgHeader) + decoded.payload_len) {
+            // Partial message, cannot process yet
             break;
         }
 
-        void *payload = (uint8_t *)buf_base + offset + sizeof(AudioMsgHeader);
+        void *payload = session->assemble_buf + offset + sizeof(AudioMsgHeader);
 
         switch (decoded.command) {
         case CMD_START: {
@@ -255,7 +281,7 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
                         session->arena.buf + session->arena_curr_start,
                         out_data_len);
 
-                    struct io_uring_sqe *sqe = io_uring_get_sqe(&session->server->ring);
+                    struct io_uring_sqe *sqe = safe_get_sqe(&session->server->ring);
                     if (sqe) {
                         io_uring_prep_send(sqe, session->client_fd, wr->data, resp_len, 0);
                         io_uring_sqe_set_data(sqe, &wr->req);
@@ -300,7 +326,7 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
                 resp_header->sequence_id          = htonl(decoded.sequence_id);
                 resp_header->payload_len          = 0;
 
-                struct io_uring_sqe *sqe = io_uring_get_sqe(&session->server->ring);
+                struct io_uring_sqe *sqe = safe_get_sqe(&session->server->ring);
                 if (sqe) {
                     io_uring_prep_send(sqe, session->client_fd, wr->data, resp_len, 0);
                     io_uring_sqe_set_data(sqe, &wr->req);
@@ -341,7 +367,7 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
                 resp_payload->num_workers = htonl(session->server->num_workers);
                 resp_payload->reserved    = 0;
 
-                struct io_uring_sqe *sqe = io_uring_get_sqe(&session->server->ring);
+                struct io_uring_sqe *sqe = safe_get_sqe(&session->server->ring);
                 if (sqe) {
                     io_uring_prep_send(sqe, session->client_fd, wr->data, resp_len, 0);
                     io_uring_sqe_set_data(sqe, &wr->req);
@@ -363,6 +389,17 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
         offset += sizeof(AudioMsgHeader) + decoded.payload_len;
     }
 
+    if (offset > 0 && offset < session->assemble_len) {
+        memmove(
+            session->assemble_buf,
+            session->assemble_buf + offset,
+            session->assemble_len - offset);
+        session->assemble_len -= offset;
+    } else if (offset == session->assemble_len) {
+        session->assemble_len = 0;
+    }
+
+return_buffer:
     io_uring_buf_ring_add(
         session->server->buf_ring->br,
         buf_base,
@@ -465,12 +502,12 @@ int mach_server_init(
     // Initialize io_uring
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
-    params.flags         = IORING_SETUP_SQPOLL;
+    params.flags = IORING_SETUP_SQPOLL;
     if (sq_thread_cpu != -1) {
         params.flags |= IORING_SETUP_SQ_AFF;
         params.sq_thread_cpu = sq_thread_cpu;
     }
-    int r                = io_uring_queue_init_params(QD, &server->ring, &params);
+    int r = io_uring_queue_init_params(QD, &server->ring, &params);
     if (r == -EINVAL) {
         LOGINF("SQPOLL invalid params, falling back to standard io_uring");
         memset(&params, 0, sizeof(params));
@@ -540,7 +577,7 @@ int mach_server_start(MachServer *const server) {
     }
 
     // Submit initial accept
-    struct io_uring_sqe *sqe = io_uring_get_sqe(&server->ring);
+    struct io_uring_sqe *sqe = safe_get_sqe(&server->ring);
     if (!sqe) {
         LOGERR("Failed to get SQE for accept");
         return -1;
@@ -549,7 +586,7 @@ int mach_server_start(MachServer *const server) {
     io_uring_sqe_set_data(sqe, &server->accept_req);
 
     // Submit initial signal read
-    sqe = io_uring_get_sqe(&server->ring);
+    sqe = safe_get_sqe(&server->ring);
     if (!sqe) {
         LOGERR("Failed to get SQE for signal");
         return -1;
@@ -632,23 +669,25 @@ int mach_server_start(MachServer *const server) {
                         session->read_req.op  = IO_OP_READ;
                         session->read_req.fd  = client_fd;
                         session->read_req.ctx = session;
+                        session->recv_active  = false;
 
                         LOGINF("New client connected");
 
                         // Submit first read
-                        struct io_uring_sqe *c_sqe = io_uring_get_sqe(&server->ring);
+                        struct io_uring_sqe *c_sqe = safe_get_sqe(&server->ring);
                         if (c_sqe) {
                             io_uring_prep_recv_multishot(c_sqe, client_fd, NULL, 0, 0);
                             c_sqe->buf_group = BGID_READ_RING;
                             c_sqe->flags |= IOSQE_BUFFER_SELECT;
                             io_uring_sqe_set_data(c_sqe, &session->read_req);
+                            session->recv_active = true;
                         }
                     }
                 }
 
                 // Re-submit accept if we are running
                 if (server->running) {
-                    struct io_uring_sqe *a_sqe = io_uring_get_sqe(&server->ring);
+                    struct io_uring_sqe *a_sqe = safe_get_sqe(&server->ring);
                     if (a_sqe) {
                         io_uring_prep_accept(a_sqe, server->listen_fd, NULL, NULL, 0);
                         io_uring_sqe_set_data(a_sqe, &server->accept_req);
@@ -658,11 +697,16 @@ int mach_server_start(MachServer *const server) {
             }
 
             case IO_OP_READ: {
-                MachSession *session = (MachSession *)req->ctx;
+                MachSession *session        = (MachSession *)req->ctx;
+                int          res            = c->res;
+                bool         has_buffer     = (c->flags & IORING_CQE_F_BUFFER) != 0;
+                int          bid            = c->flags >> IORING_CQE_BUFFER_SHIFT;
+                uint8_t     *buffer_address = NULL;
 
-                bool  has_buffer     = (c->flags & IORING_CQE_F_BUFFER) != 0;
-                int   bid            = -1;
-                void *buffer_address = NULL;
+                if (!(c->flags & IORING_CQE_F_MORE)) {
+                    session->recv_active = false;
+                }
+
                 if (has_buffer) {
                     bid            = c->flags >> IORING_CQE_BUFFER_SHIFT;
                     buffer_address = (uint8_t *)server->buf_ring->buf_mem + (bid * BUF_SIZE);
@@ -684,13 +728,16 @@ int mach_server_start(MachServer *const server) {
                         LOGERR("Read error: %s", strerror(-res));
                     }
                     if (res == -ENOBUFS) {
-                        // Silent resubmission since this is normal under heavy stream load
-                        struct io_uring_sqe *r_sqe = io_uring_get_sqe(&server->ring);
+                        LOGERR(
+                            "Buffer ring exhausted (-ENOBUFS) on fd %d. Re-arming multishot.",
+                            session->client_fd);
+                        struct io_uring_sqe *r_sqe = safe_get_sqe(&server->ring);
                         if (r_sqe) {
                             io_uring_prep_recv_multishot(r_sqe, session->client_fd, NULL, 0, 0);
                             r_sqe->buf_group = BGID_READ_RING;
                             r_sqe->flags |= IOSQE_BUFFER_SELECT;
                             io_uring_sqe_set_data(r_sqe, &session->read_req);
+                            session->recv_active = true;
                         }
                     } else {
                         LOGINF("Client disconnected");
@@ -704,14 +751,19 @@ int mach_server_start(MachServer *const server) {
                         LOGERR("Read succeeded but no buffer was selected!");
                     }
 
-                    if (!(c->flags & IORING_CQE_F_MORE)) {
-                        struct io_uring_sqe *r_sqe = io_uring_get_sqe(&server->ring);
+                    if (!session->closing && !(c->flags & IORING_CQE_F_MORE)) {
+                        struct io_uring_sqe *r_sqe = safe_get_sqe(&server->ring);
                         if (r_sqe) {
                             io_uring_prep_recv_multishot(r_sqe, session->client_fd, NULL, 0, 0);
                             r_sqe->buf_group = BGID_READ_RING;
                             r_sqe->flags |= IOSQE_BUFFER_SELECT;
                             io_uring_sqe_set_data(r_sqe, &session->read_req);
+                            session->recv_active = true;
                         }
+                    }
+
+                    if (session->closing) {
+                        cleanup_session_if_needed(session);
                     }
                 }
                 break;

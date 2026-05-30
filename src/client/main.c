@@ -45,6 +45,7 @@ typedef struct {
     bool        loop;
     uint32_t    duration_sec;
     bool        vad_enabled;
+    uint32_t    ramp_up_sec;
 } ClientConfig;
 
 typedef struct {
@@ -87,6 +88,7 @@ typedef struct {
     ClientConnection *connections;
     uv_timer_t        global_timer;
     bool              running;
+    uint32_t          num_workers;
 } ClientApp;
 
 static ClientApp g_app = {0};
@@ -130,6 +132,8 @@ static void print_usage(char const *prog) {
     printf("  -p, --ptime <ms>          Packet time in ms (default: %d)\n", DEFAULT_PTIME_MS);
     printf("  -l, --loop                Loop the input file\n");
     printf("  -d, --duration <sec>      Total test duration when looping\n");
+    printf("  -U, --ramp-up <sec>       Stagger connection establishment over N seconds (default: "
+           "0)\n");
     printf("  -V, --vad                 Enable VAD processing\n");
     printf("  -h, --help                Show this help\n");
 }
@@ -156,6 +160,7 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
         {"loop", no_argument, 0, 'l'},
         {"duration", required_argument, 0, 'd'},
         {"vad", no_argument, 0, 'V'},
+        {"ramp-up", required_argument, 0, 'U'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}};
 
@@ -174,13 +179,14 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
     config->concurrent   = DEFAULT_CONCURRENT;
     config->ptime        = DEFAULT_PTIME_MS;
     config->vad_enabled  = false;
+    config->ramp_up_sec  = 0;
 
     int opt;
     int option_index = 0;
     while ((opt = getopt_long(
                 argc,
                 argv,
-                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:hV",
+                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:hVU:",
                 long_options,
                 &option_index)) != -1)
     {
@@ -244,6 +250,9 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
             break;
         case 'V':
             config->vad_enabled = true;
+            break;
+        case 'U':
+            config->ramp_up_sec = (uint32_t)atoi(optarg);
             break;
         case 'h':
         default:
@@ -413,13 +422,6 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
                 uint32_t prob_net_bits;
                 memcpy(&prob_net_bits, &payload->vad_prob, sizeof(uint32_t));
                 float const vad_prob = protocol_net_to_float(prob_net_bits);
-
-                if (g_app.config.vad_enabled) {
-                    LOGINF(
-                        "Connection %u received chunk with VAD probability: %.6f",
-                        conn->id,
-                        vad_prob);
-                }
 
                 conn->count_received++;
                 conn->total_received += header.payload_len - sizeof(struct audio_output_payload);
@@ -729,6 +731,17 @@ static int compare_uint64(void const *const a, void const *const b) {
     return (va > vb) - (va < vb);
 }
 
+static void on_ramp_up_delay(uv_timer_t *handle) {
+    ClientConnection *const conn        = (ClientConnection *)handle->data;
+    uv_connect_t *const     connect_req = malloc(sizeof(uv_connect_t));
+    if (!connect_req) {
+        LOGERR("Failed to allocate connect request for connection %u", conn->id);
+        return;
+    }
+    connect_req->data = conn;
+    client_connect(&conn->handle.stream, connect_req, on_connect, conn->id % g_app.num_workers);
+}
+
 int main(int argc, char **argv) {
     parse_args(argc, argv, &g_app.config);
     load_input_file(&g_app);
@@ -754,6 +767,8 @@ int main(int argc, char **argv) {
         }
         return 1;
     }
+
+    g_app.num_workers = dc.num_workers;
 
     g_app.connections = calloc(g_app.config.concurrent, sizeof(ClientConnection));
     if (!g_app.connections) {
@@ -820,9 +835,21 @@ int main(int argc, char **argv) {
             }
         }
 
-        uv_connect_t *const connect_req = malloc(sizeof(uv_connect_t));
-        connect_req->data               = conn;
-        client_connect(&conn->handle.stream, connect_req, on_connect, i % dc.num_workers);
+        if (g_app.config.ramp_up_sec > 0 && g_app.config.concurrent > 1) {
+            uint64_t const delay_ms =
+                ((uint64_t)i * g_app.config.ramp_up_sec * 1000) / g_app.config.concurrent;
+            uv_timer_start(&conn->timer, on_ramp_up_delay, delay_ms, 0);
+        } else {
+            uv_connect_t *const connect_req = malloc(sizeof(uv_connect_t));
+            if (connect_req) {
+                connect_req->data = conn;
+                client_connect(
+                    &conn->handle.stream,
+                    connect_req,
+                    on_connect,
+                    i % g_app.num_workers);
+            }
+        }
     }
 
     if (g_app.config.duration_sec > 0) {
@@ -855,16 +882,16 @@ int main(int argc, char **argv) {
     size_t all_latencies_idx = 0;
 
     for (uint32_t i = 0; i < g_app.config.concurrent; i++) {
-        ClientConnection *const conn = &g_app.connections[i];
-        uint64_t avg_val = 0;
-        uint64_t p95_val = 0;
+        ClientConnection *const conn    = &g_app.connections[i];
+        uint64_t                avg_val = 0;
+        uint64_t                p95_val = 0;
 
         if (conn->latencies_count > 0) {
             qsort(conn->latencies, conn->latencies_count, sizeof(uint64_t), compare_uint64);
 
-            size_t const   p95_idx = (conn->latencies_count * 95) / 100;
-            p95_val = conn->latencies[p95_idx];
-            avg_val = conn->sum_duration_ns / conn->latencies_count;
+            size_t const p95_idx = (conn->latencies_count * 95) / 100;
+            p95_val              = conn->latencies[p95_idx];
+            avg_val              = conn->sum_duration_ns / conn->latencies_count;
 
             LOGINF(
                 "  Conn %u: Avg: %.3f ms, P95: %.3f ms, Min: %.3f ms, Max: %.3f ms (samples: %zu)",
@@ -886,7 +913,12 @@ int main(int argc, char **argv) {
 
         if (g_app.config.write_output) {
             char stats_filename[512];
-            snprintf(stats_filename, sizeof(stats_filename), "%s/%04u/stats.txt", timestamp_str, conn->id);
+            snprintf(
+                stats_filename,
+                sizeof(stats_filename),
+                "%s/%04u/stats.txt",
+                timestamp_str,
+                conn->id);
             FILE *sf = fopen(stats_filename, "w");
             if (sf) {
                 fprintf(sf, "=== Connection %04u Stats ===\n", conn->id);
@@ -895,10 +927,16 @@ int main(int argc, char **argv) {
                 fprintf(sf, "Total Packets Received: %lu\n", conn->count_received);
                 fprintf(sf, "Total Bytes Sent:       %lu bytes\n", conn->total_sent);
                 fprintf(sf, "Total Bytes Received:   %lu bytes\n", conn->total_received);
-                
+
                 if (conn->latencies_count > 0) {
-                    fprintf(sf, "Min Latency:            %.3f ms\n", (double)conn->min_duration_ns / 1000000.0);
-                    fprintf(sf, "Max Latency:            %.3f ms\n", (double)conn->max_duration_ns / 1000000.0);
+                    fprintf(
+                        sf,
+                        "Min Latency:            %.3f ms\n",
+                        (double)conn->min_duration_ns / 1000000.0);
+                    fprintf(
+                        sf,
+                        "Max Latency:            %.3f ms\n",
+                        (double)conn->max_duration_ns / 1000000.0);
                     fprintf(sf, "Avg Latency:            %.3f ms\n", (double)avg_val / 1000000.0);
                     fprintf(sf, "P95 Latency:            %.3f ms\n", (double)p95_val / 1000000.0);
                 } else {
@@ -907,20 +945,33 @@ int main(int argc, char **argv) {
                     fprintf(sf, "Avg Latency:            N/A\n");
                     fprintf(sf, "P95 Latency:            N/A\n");
                 }
-                
+
                 if (g_app.config.input_file_2) {
-                    fprintf(sf, "Input Codecs:           %s, %s\n", 
-                            get_codec_extension(g_app.config.format),
-                            get_codec_extension(g_app.config.format));
-                    fprintf(sf, "Input Files:            %s, %s\n", 
-                            g_app.config.input_file,
-                            g_app.config.input_file_2);
+                    fprintf(
+                        sf,
+                        "Input Codecs:           %s, %s\n",
+                        get_codec_extension(g_app.config.format),
+                        get_codec_extension(g_app.config.format));
+                    fprintf(
+                        sf,
+                        "Input Files:            %s, %s\n",
+                        g_app.config.input_file,
+                        g_app.config.input_file_2);
                 } else {
-                    fprintf(sf, "Input Codec:            %s\n", get_codec_extension(g_app.config.format));
+                    fprintf(
+                        sf,
+                        "Input Codec:            %s\n",
+                        get_codec_extension(g_app.config.format));
                     fprintf(sf, "Input File:             %s\n", g_app.config.input_file);
                 }
-                fprintf(sf, "Output Codec:           %s\n", get_codec_extension(g_app.config.out_format));
-                fprintf(sf, "VAD Enabled:            %s\n", g_app.config.vad_enabled ? "Yes" : "No");
+                fprintf(
+                    sf,
+                    "Output Codec:           %s\n",
+                    get_codec_extension(g_app.config.out_format));
+                fprintf(
+                    sf,
+                    "VAD Enabled:            %s\n",
+                    g_app.config.vad_enabled ? "Yes" : "No");
                 fclose(sf);
             } else {
                 LOGERR("Failed to open stats file: %s", stats_filename);
@@ -953,10 +1004,10 @@ int main(int argc, char **argv) {
     LOGINF("Global Summary:");
     LOGINF("  Total Sent:     %lu bytes", total_sent);
     LOGINF("  Total Received: %lu bytes", total_received);
-    
+
     uint64_t avg_ns = 0;
     uint64_t p95_ns = 0;
-    
+
     if (count_received > 0) {
         avg_ns = sum_duration_ns / count_received;
         if (all_latencies) {
@@ -983,7 +1034,7 @@ int main(int argc, char **argv) {
             fprintf(sf, "Concurrent Connections: %u\n", g_app.config.concurrent);
             fprintf(sf, "Total Sent:             %lu bytes\n", total_sent);
             fprintf(sf, "Total Received:         %lu bytes\n", total_received);
-            
+
             if (count_received > 0) {
                 fprintf(sf, "Min Latency:            %.3f ms\n", (double)global_min / 1000000.0);
                 fprintf(sf, "Max Latency:            %.3f ms\n", (double)global_max / 1000000.0);
@@ -995,15 +1046,23 @@ int main(int argc, char **argv) {
                 fprintf(sf, "Avg Latency:            N/A\n");
                 fprintf(sf, "P95 Latency:            N/A\n");
             }
-            
+
             if (g_app.config.input_file_2) {
-                fprintf(sf, "Input Codecs:           %s, %s\n", 
-                        get_codec_extension(g_app.config.format),
-                        get_codec_extension(g_app.config.format));
+                fprintf(
+                    sf,
+                    "Input Codecs:           %s, %s\n",
+                    get_codec_extension(g_app.config.format),
+                    get_codec_extension(g_app.config.format));
             } else {
-                fprintf(sf, "Input Codec:            %s\n", get_codec_extension(g_app.config.format));
+                fprintf(
+                    sf,
+                    "Input Codec:            %s\n",
+                    get_codec_extension(g_app.config.format));
             }
-            fprintf(sf, "Output Codec:           %s\n", get_codec_extension(g_app.config.out_format));
+            fprintf(
+                sf,
+                "Output Codec:           %s\n",
+                get_codec_extension(g_app.config.out_format));
             fprintf(sf, "VAD Enabled:            %s\n", g_app.config.vad_enabled ? "Yes" : "No");
             fclose(sf);
         } else {

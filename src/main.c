@@ -42,8 +42,10 @@ static void tune_sqpoll_thread(pid_t worker_pid, int rt_priority, int core) {
                         pid_t tid = atoi(ent->d_name);
                         LOGINF("Found SQPOLL thread %d for worker %d, tuning...", tid, worker_pid);
 
-                        if (rt_priority > 0) {
-                            struct sched_param sp = {.sched_priority = rt_priority};
+                        if (rt_priority > 1) {
+                            // Give SQPOLL slightly lower priority than the worker so the worker can
+                            // preempt it
+                            struct sched_param sp = {.sched_priority = rt_priority - 1};
                             if (sched_setscheduler(tid, SCHED_FIFO, &sp) < 0) {
                                 LOGERR(
                                     "Failed to set SCHED_FIFO for SQPOLL thread %d: %s",
@@ -90,15 +92,15 @@ static void print_usage(char const *const prog) {
 
 static void parse_core_mask(const char *mask_str, int **cores, int *num_cores) {
     if (!mask_str) {
-        *cores = malloc(sizeof(int));
+        *cores      = malloc(sizeof(int));
         (*cores)[0] = 0;
-        *num_cores = 1;
+        *num_cores  = 1;
         return;
     }
 
     if (strncmp(mask_str, "0x", 2) == 0) {
-        unsigned long long mask = strtoull(mask_str, NULL, 16);
-        int count = 0;
+        unsigned long long mask  = strtoull(mask_str, NULL, 16);
+        int                count = 0;
         for (int i = 0; i < 64; i++) {
             if ((mask & (1ULL << i)) != 0) {
                 count++;
@@ -107,7 +109,7 @@ static void parse_core_mask(const char *mask_str, int **cores, int *num_cores) {
         *cores = malloc(sizeof(int) * (count > 0 ? count : 1));
         if (count == 0) {
             (*cores)[0] = 0;
-            *num_cores = 1;
+            *num_cores  = 1;
             return;
         }
         int idx = 0;
@@ -118,19 +120,20 @@ static void parse_core_mask(const char *mask_str, int **cores, int *num_cores) {
         }
         *num_cores = count;
     } else if (strcmp(mask_str, "none") == 0) {
-        *cores = malloc(sizeof(int));
+        *cores      = malloc(sizeof(int));
         (*cores)[0] = -1;
-        *num_cores = 1;
+        *num_cores  = 1;
     } else {
-        char *str = strdup(mask_str);
-        int count = 0;
+        char *str   = strdup(mask_str);
+        int   count = 0;
         for (char *p = str; *p; p++) {
-            if (*p == ',') count++;
+            if (*p == ',')
+                count++;
         }
         count++; // At least 1 item
-        
-        *cores = malloc(sizeof(int) * count);
-        int idx = 0;
+
+        *cores      = malloc(sizeof(int) * count);
+        int   idx   = 0;
         char *token = strtok(str, ",");
         while (token) {
             if (strcmp(token, "none") == 0) {
@@ -159,7 +162,7 @@ int run_worker(
     if (assigned_core != -1) {
         os_pin_thread(assigned_core);
     }
-    
+
     if (rt_priority > 0) {
         os_set_rt_priority(rt_priority);
     }
@@ -219,6 +222,10 @@ int run_worker(
 }
 
 int main(int argc, char **argv) {
+    // Ignore SIGPIPE to prevent the server from crashing when writing to a socket that the client
+    // closed abruptly
+    signal(SIGPIPE, SIG_IGN);
+
     char const *core_mask_str = NULL;
     int         rt_priority   = -1;
     int         fd_limit      = 4096;
@@ -268,8 +275,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    int *cores = NULL;
-    int num_workers = 1;
+    int *cores       = NULL;
+    int  num_workers = 1;
     parse_core_mask(core_mask_str, &cores, &num_workers);
 
     sigset_t mask;
@@ -279,19 +286,31 @@ int main(int argc, char **argv) {
     sigprocmask(SIG_BLOCK, &mask, NULL);
 
     char cores_log[512] = {0};
-    int offset = 0;
+    int  offset         = 0;
     for (int i = 0; i < num_workers; i++) {
         int written = 0;
         if (cores[i] == -1) {
-            written = snprintf(cores_log + offset, sizeof(cores_log) - offset, "none%s", i < num_workers - 1 ? ", " : "");
+            written = snprintf(
+                cores_log + offset,
+                sizeof(cores_log) - offset,
+                "none%s",
+                i < num_workers - 1 ? ", " : "");
         } else {
-            written = snprintf(cores_log + offset, sizeof(cores_log) - offset, "%d%s", cores[i], i < num_workers - 1 ? ", " : "");
+            written = snprintf(
+                cores_log + offset,
+                sizeof(cores_log) - offset,
+                "%d%s",
+                cores[i],
+                i < num_workers - 1 ? ", " : "");
         }
         if (written > 0 && offset + written < (int)sizeof(cores_log)) {
             offset += written;
         }
     }
-    LOGINF("MachAudio Supervisor Service Starting with %d workers on cores: [%s]", num_workers, cores_log);
+    LOGINF(
+        "MachAudio Supervisor Service Starting with %d workers on cores: [%s]",
+        num_workers,
+        cores_log);
 #ifdef __AVX2__
     LOGINF("SIMD: AVX2 extensions enabled");
 #else
