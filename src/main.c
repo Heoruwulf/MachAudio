@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include "machaudio/log.h"
 #include "machaudio/macros.h"
+#include "machaudio/opus_pool.h"
 #include "machaudio/os_tune.h"
 #include "machaudio/server.h"
 #include "processing/vad_training_loader.h"
@@ -90,6 +91,10 @@ static void print_usage(char const *const prog) {
     fprintf(stderr, "  -D, --uds-dir <dir>   Directory for UDS sockets (default: /tmp)\n");
     fprintf(stderr, "  -L, --fd-limit <N>    Set max open files limit (default: 4096)\n");
     fprintf(stderr, "  -v, --vad-data <path> Custom VAD training data file (overrides env var)\n");
+    fprintf(stderr, "  -o, --enable-opus     Enable Opus Fair-Scheduling mode\n");
+    fprintf(
+        stderr,
+        "  -t, --opus-threads <N> Number of threads for the Opus pool (default: CPU cores)\n");
     fprintf(stderr, "  -h, --help            Show this help message\n");
 }
 
@@ -158,7 +163,9 @@ int run_worker(
     char const *host,
     int         base_port,
     char const *uds_dir,
-    uint32_t    num_workers) {
+    uint32_t    num_workers,
+    bool        enable_opus,
+    uint32_t    opus_threads) {
     LOGINF("Worker %d (PID %d) starting...", worker_index, getpid());
 
     // Apply OS tuning
@@ -187,16 +194,35 @@ int run_worker(
             host,
             base_port + worker_index,
             num_workers,
-            assigned_core);
+            assigned_core,
+            enable_opus,
+            opus_threads);
     } else {
-        snprintf(
+        if (enable_opus) {
+            snprintf(
+                socket_path,
+                sizeof(socket_path),
+                "%s/%s.opus.sock",
+                uds_dir,
+                DEFAULT_UDS_NAME);
+        } else {
+            snprintf(
+                socket_path,
+                sizeof(socket_path),
+                "%s/%s.%d.sock",
+                uds_dir,
+                DEFAULT_UDS_NAME,
+                worker_index);
+        }
+        r = mach_server_init(
+            &server,
             socket_path,
-            sizeof(socket_path),
-            "%s/%s.%d.sock",
-            uds_dir,
-            DEFAULT_UDS_NAME,
-            worker_index);
-        r = mach_server_init(&server, socket_path, NULL, 0, num_workers, assigned_core);
+            NULL,
+            0,
+            num_workers,
+            assigned_core,
+            enable_opus,
+            opus_threads);
     }
 
     if (r != 0) {
@@ -212,6 +238,10 @@ int run_worker(
 
     r = mach_server_start(&server);
     LOGINF("Worker %d stopping.", worker_index);
+
+    if (enable_opus) {
+        opus_pool_shutdown();
+    }
 
     if (dma_latency_fd >= 0) {
         close(dma_latency_fd);
@@ -260,6 +290,18 @@ int main(int argc, char **argv) {
 
     char const *vad_path = mach_getenv("MACH_VAD_DATA");
 
+    bool        enable_opus = false;
+    char const *opus_env    = mach_getenv("MACH_ENABLE_OPUS");
+    if (opus_env && (strcmp(opus_env, "1") == 0 || strcasecmp(opus_env, "true") == 0)) {
+        enable_opus = true;
+    }
+
+    uint32_t    opus_threads     = 0;
+    char const *opus_threads_env = mach_getenv("MACH_OPUS_THREADS");
+    if (opus_threads_env) {
+        opus_threads = (uint32_t)atoi(opus_threads_env);
+    }
+
     static struct option const long_options[] = {
         {"core-mask", required_argument, 0, 'c'},
         {"rt-priority", required_argument, 0, 'p'},
@@ -268,11 +310,13 @@ int main(int argc, char **argv) {
         {"uds-dir", required_argument, 0, 'D'},
         {"fd-limit", required_argument, 0, 'L'},
         {"vad-data", required_argument, 0, 'v'},
+        {"enable-opus", no_argument, 0, 'o'},
+        {"opus-threads", required_argument, 0, 't'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}};
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "c:p:H:P:D:L:v:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:p:H:P:D:L:v:ot:h", long_options, NULL)) != -1) {
         switch (opt) {
         case 'c':
             core_mask_str = optarg;
@@ -297,6 +341,12 @@ int main(int argc, char **argv) {
         case 'v':
             vad_path = optarg;
             break;
+        case 'o':
+            enable_opus = true;
+            break;
+        case 't':
+            opus_threads = (uint32_t)atoi(optarg);
+            break;
         case 'h':
             print_usage(argv[0]);
             return 0;
@@ -308,6 +358,17 @@ int main(int argc, char **argv) {
     int *cores       = NULL;
     int  num_workers = 1;
     parse_core_mask(core_mask_str, &cores, &num_workers);
+
+    if (enable_opus) {
+        LOGINF("Opus mode enabled. Forcing single worker process and disabling core-pinning.");
+        num_workers = 1;
+        cores[0]    = -1;
+        if (opus_threads == 0) {
+            opus_threads = sysconf(_SC_NPROCESSORS_ONLN);
+            if (opus_threads < 4)
+                opus_threads = 4;
+        }
+    }
 
     sigset_t mask;
     sigemptyset(&mask);
@@ -366,7 +427,9 @@ int main(int argc, char **argv) {
                 host,
                 base_port,
                 uds_dir,
-                (uint32_t)num_workers);
+                (uint32_t)num_workers,
+                enable_opus,
+                opus_threads);
             vad_training_data_free(&vad_data);
             free(worker_pids);
             free(cores);

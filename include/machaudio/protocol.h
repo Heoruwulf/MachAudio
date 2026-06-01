@@ -32,6 +32,7 @@ typedef enum {
     ERR_INVALID_PAYLOAD     = 4,
     ERR_PROCESSING_FAILED   = 5,
     ERR_INTERNAL_ERROR      = 6,
+    ERR_UNSUPPORTED_CODEC   = 7,
 } AudioErrorCode;
 
 typedef struct {

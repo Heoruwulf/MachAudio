@@ -25,6 +25,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_search_module(LIBURING REQUIRED liburing)
 pkg_search_module(LIBUV REQUIRED libuv)
+pkg_check_modules(OPUS REQUIRED opus)
 
 
 # Unity Test Framework
@@ -41,7 +42,7 @@ include_directories(
     include
     ${LIBURING_INCLUDE_DIRS}
     ${LIBUV_INCLUDE_DIRS}
-
+    ${OPUS_INCLUDE_DIRS}
 )
 
 enable_testing()

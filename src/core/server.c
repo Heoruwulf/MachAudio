@@ -1,5 +1,6 @@
 #include "machaudio/server.h"
 #include "machaudio/log.h"
+#include "machaudio/opus_pool.h"
 #include "machaudio/protocol.h"
 
 #include <arpa/inet.h>
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/signalfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -88,6 +90,9 @@ static void cleanup_session_if_needed(MachSession *session) {
             session->client_fd = -1;
         }
         if (!session->recv_active) {
+            if (session->server->opus_mode) {
+                opus_pool_unregister_session(session);
+            }
             transcode_session_stop(&session->transcode_session);
             audio_engine_destroy(&session->audio_engine);
             free(session);
@@ -205,6 +210,19 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
             struct audio_start_payload const *const config =
                 (struct audio_start_payload const *)payload;
 
+            if (session->server->opus_mode) {
+                uint8_t in_enc  = config->in_payload_type;
+                uint8_t out_enc = config->out_payload_type;
+                if (in_enc != CODEC_OPUS && in_enc != CODEC_L16) {
+                    send_error_uring(session, decoded.sequence_id, ERR_UNSUPPORTED_CODEC);
+                    break;
+                }
+                if (out_enc != CODEC_OPUS && out_enc != CODEC_L16) {
+                    send_error_uring(session, decoded.sequence_id, ERR_UNSUPPORTED_CODEC);
+                    break;
+                }
+            }
+
             transcode_session_init(&session->transcode_session, config);
 
             audio_engine_destroy(&session->audio_engine);
@@ -227,6 +245,19 @@ static void process_client_read(MachSession *session, int nread, void *buf_base,
         case CMD_INPUT: {
             if (decoded.payload_len < sizeof(struct audio_input_payload)) {
                 send_error_uring(session, decoded.sequence_id, ERR_INVALID_PAYLOAD);
+                break;
+            }
+
+            if (session->server->opus_mode) {
+                int err = opus_pool_enqueue_job(
+                    session,
+                    decoded.sequence_id,
+                    decoded.command,
+                    payload,
+                    decoded.payload_len);
+                if (err < 0) {
+                    send_error_uring(session, decoded.sequence_id, ERR_PROCESSING_FAILED);
+                }
                 break;
             }
 
@@ -416,7 +447,9 @@ int mach_server_init(
     char const *const host,
     int const         port,
     uint32_t const    num_workers,
-    int const         sq_thread_cpu) {
+    int const         sq_thread_cpu,
+    bool const        opus_mode,
+    uint32_t const    opus_threads) {
     if (server == NULL) {
         return -1;
     }
@@ -427,6 +460,7 @@ int mach_server_init(
     server->is_tcp      = (host != NULL);
     server->num_workers = num_workers;
     server->running     = false;
+    server->opus_mode   = opus_mode;
 
     // Create the listening socket
     int fd;
@@ -557,6 +591,28 @@ int mach_server_init(
     server->signal_req.fd  = server->signal_fd;
     server->signal_req.ctx = server;
 
+    if (server->opus_mode) {
+        int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+        if (efd < 0) {
+            LOGERR("Failed to create opus_event_fd: %s", strerror(errno));
+            io_uring_queue_exit(&server->ring);
+            close(fd);
+            return -1;
+        }
+        server->opus_event_fd      = efd;
+        server->opus_event_req.op  = IO_OP_OPUS_EVENT;
+        server->opus_event_req.fd  = efd;
+        server->opus_event_req.ctx = server;
+
+        if (opus_pool_init(opus_threads, server->opus_event_fd) < 0) {
+            LOGERR("Failed to init opus pool");
+            close(efd);
+            io_uring_queue_exit(&server->ring);
+            close(fd);
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -594,6 +650,15 @@ int mach_server_start(MachServer *const server) {
     static struct signalfd_siginfo sig_info;
     io_uring_prep_read(sqe, server->signal_fd, &sig_info, sizeof(sig_info), 0);
     io_uring_sqe_set_data(sqe, &server->signal_req);
+
+    if (server->opus_mode) {
+        struct io_uring_sqe *o_sqe = safe_get_sqe(&server->ring);
+        if (o_sqe) {
+            static uint64_t efd_val;
+            io_uring_prep_read(o_sqe, server->opus_event_fd, &efd_val, sizeof(efd_val), 0);
+            io_uring_sqe_set_data(o_sqe, &server->opus_event_req);
+        }
+    }
 
     int r = io_uring_submit(&server->ring);
     if (r < 0) {
@@ -635,6 +700,89 @@ int mach_server_start(MachServer *const server) {
                 } else {
                     LOGERR("Signalfd read error: %d", res);
                     mach_server_stop(server);
+                }
+                break;
+            }
+
+            case IO_OP_OPUS_EVENT: {
+                if (res < 0) {
+                    LOGERR("Opus eventfd read error: %s", strerror(-res));
+                } else {
+                    OpusCompletedJob cjob;
+                    while (opus_pool_dequeue_completed(&cjob)) {
+                        if (cjob.session->closing) {
+                            opus_pool_free_completed_job(&cjob);
+                            continue;
+                        }
+
+                        if (cjob.error_code != 0) {
+                            send_error_uring(cjob.session, cjob.sequence_id, ERR_PROCESSING_FAILED);
+                        } else {
+                            size_t const payload_len =
+                                sizeof(struct audio_output_payload) + cjob.out_len;
+                            size_t const resp_len = sizeof(AudioMsgHeader) + payload_len;
+
+                            WriteResponse *wr = get_write_response(cjob.session, resp_len);
+                            if (wr) {
+                                wr->req.op  = IO_OP_WRITE;
+                                wr->req.fd  = cjob.session->client_fd;
+                                wr->req.ctx = wr;
+                                wr->session = cjob.session;
+                                wr->len     = resp_len;
+
+                                AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
+                                resp_header->magic                = htonl(AUDIO_MAGIC);
+                                resp_header->version              = htons(AUDIO_VERSION);
+                                resp_header->command              = htons(CMD_OUTPUT);
+                                resp_header->sequence_id          = htonl(cjob.sequence_id);
+                                resp_header->payload_len          = htonl((uint32_t)payload_len);
+
+                                struct audio_output_payload *const resp_payload =
+                                    (struct audio_output_payload *)(wr->data +
+                                                                    sizeof(AudioMsgHeader));
+                                resp_payload->duration_ns = htobe64(cjob.duration_ns);
+
+                                uint32_t const prob_net = protocol_float_to_net(
+                                    cjob.session->transcode_session.last_vad_prob);
+                                memcpy(&resp_payload->vad_prob, &prob_net, sizeof(float));
+
+                                memset(resp_payload->reserved, 0, sizeof(resp_payload->reserved));
+                                if (cjob.out_data) {
+                                    memcpy(resp_payload->data, cjob.out_data, cjob.out_len);
+                                }
+
+                                struct io_uring_sqe *sqe = safe_get_sqe(&server->ring);
+                                if (sqe) {
+                                    io_uring_prep_send(
+                                        sqe,
+                                        cjob.session->client_fd,
+                                        wr->data,
+                                        resp_len,
+                                        0);
+                                    io_uring_sqe_set_data(sqe, &wr->req);
+                                    cjob.session->pending_writes++;
+                                    io_uring_submit(&server->ring);
+                                } else {
+                                    free_write_response(wr);
+                                }
+                            }
+                        }
+                        opus_pool_free_completed_job(&cjob);
+                    }
+                }
+
+                if (server->running) {
+                    struct io_uring_sqe *o_sqe = safe_get_sqe(&server->ring);
+                    if (o_sqe) {
+                        static uint64_t efd_val;
+                        io_uring_prep_read(
+                            o_sqe,
+                            server->opus_event_fd,
+                            &efd_val,
+                            sizeof(efd_val),
+                            0);
+                        io_uring_sqe_set_data(o_sqe, &server->opus_event_req);
+                    }
                 }
                 break;
             }
@@ -681,6 +829,10 @@ int mach_server_start(MachServer *const server) {
                             c_sqe->flags |= IOSQE_BUFFER_SELECT;
                             io_uring_sqe_set_data(c_sqe, &session->read_req);
                             session->recv_active = true;
+                        }
+
+                        if (server->opus_mode) {
+                            opus_pool_register_session(session);
                         }
                     }
                 }

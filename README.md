@@ -17,6 +17,7 @@ The service communicates over Unix Domain Sockets (UDS) and TCP/IP using a custo
 * **Comprehensive Transcoding:**
   * **G.711 (PCMU / PCMA):** High-speed compression/expansion to and from 16-bit linear PCM.
   * **L16:** Raw 16-bit PCM with automatic endianness swapping based on host and protocol specifications.
+  * **Opus Mode:** Optional fair-scheduled worker thread pool architecture to prevent CPU starvation when handling the heavy math of Opus decoding and encoding across thousands of concurrent streams.
 * **Dynamic Resampling:** High-quality sample rate conversion (e.g., 8kHz to 48kHz) using SIMD-accelerated polyphase FIR filters.
 * **Voice Activity Detection (VAD):** Integrated zero-allocation, real-time Voice Activity Detection using a Micro-GRU neural network architecture, accelerated with AVX2/FMA intrinsics. Returns real-time speech probability (0.0f to 1.0f) packaged directly in output frames. For architecture details, dataset sensitivities, and the VAD Spectrogram Dashboard, see the [Micro-GRU VAD Documentation](docs/micro-gru-vad.md).
 * **Asynchronous I/O:** Event-driven architecture utilizing a dedicated, native `io_uring` proactor event loop per worker process.
@@ -51,9 +52,8 @@ Linear scaling is achieved via the pre-forking architecture. A standard 8-core i
 1. **Transport Layer:** Native `io_uring` proactor stream handling supports both Unix Domain Sockets (e.g., `/tmp/machaudio.N.sock`) and TCP/IP (e.g., port `8000 + N`), managing non-blocking reads and writes without system-call overhead. For details on container orchestration and auto-scaling, see the [Deployment Guide](docs/deploy.md) and [DevOps & Deployment Guide](docs/devops.md).
 2. **Protocol Layer:** A custom, naturally aligned sequential TLV binary protocol. It parses fixed-size headers (`AudioMsgHeader`) and structured payloads including `CMD_START`, `CMD_INPUT` (supporting multiple sequential audio buffers), `CMD_DISCOVER`, `CMD_PING`, and explicit `CMD_ERROR` states. For detailed integration info, see the [Protocol Specification](docs/protocol.md).
 3. **Processing Pipeline:**
-    * **Decode:** Converts incoming streams (PCMU, PCMA) to a normalized L16 format within the Arena.
-    * **Resample:** Applies a polyphase FIR filter if the input and output sample rates differ, writing to a new block in the Arena.
-    * **Encode:** Compresses the normalized (and optionally resampled) L16 buffer back to the requested output format.
+    * **Real-Time Mode (Default):** Processes G.711 and L16 inline using zero-allocation Arenas on a single event loop without yielding.
+    * **Opus Mode:** Bypasses inline execution, utilizing an M:N thread pool model with a Round-Robin Fair Scheduler to encode/decode Opus buffers evenly, preventing any single heavy stream from starving the networking loop.
 
 ## 🛠 Building and Running
 
@@ -118,6 +118,8 @@ You can start the daemon with standard privileges, or use the CLI flags to spawn
 * `-D, --uds-dir <dir>`: Directory for Unix Domain Sockets (default: `/tmp`).
 * `-L, --fd-limit <N>`: Set the maximum open file descriptors limit (`RLIMIT_NOFILE`) for the daemon (default: 4096).
 * `-v, --vad-data <path>`: Custom VAD training data file to load on startup, overriding the built-in dataset.
+* `-o, --enable-opus`: Run MachAudio in Opus Fair-Scheduling mode (disables multi-process pinning and runs a single worker with a thread pool).
+* `-t, --opus-threads <N>`: Number of threads to allocate for the Opus pool (default: equal to the number of physical CPU cores).
 
 ### Environment Variable Configuration
 
@@ -131,6 +133,8 @@ For a complete template, see the `env.sample` file included in the project root.
 * `MACH_UDS_DIR` (Overrides `-D`)
 * `MACH_FD_LIMIT` (Overrides `-L`)
 * `MACH_VAD_DATA` (Overrides `-v`)
+* `MACH_ENABLE_OPUS` (Overrides `-o`)
+* `MACH_OPUS_THREADS` (Overrides `-t`)
 
 **How Worker Topology & Core Pinning Works:**
 
@@ -146,6 +150,9 @@ If you specify `-c 2,3,4,5` (or `-c 0x3C`), the supervisor will fork 4 workers:
 Alternatively, you can skip explicit CPU pinning by passing `none`. For example, `-c none,none` will spawn 2 workers that are scheduled dynamically by the OS kernel without explicit thread affinity.
 
 *Note: The client can automatically discover this topology by connecting to Worker 0 and sending a `CMD_DISCOVER` message.*
+
+**Opus Mode Topology:**
+When running with `--enable-opus`, the supervisor skips the multi-worker core-pinning logic entirely. Instead, it forces exactly **one** worker process that uses a single `machaudio.opus.sock` UDS and spawns an internal thread pool managed by the OS kernel to fairly distribute the heavy Opus transcoding load.
 
 **Permissions:**
 Using the `--rt-priority` flag requires elevated privileges. You must either run the server as `root` (`sudo`) or grant the binary the `CAP_SYS_NICE` capability:

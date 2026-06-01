@@ -22,7 +22,7 @@ struct buf_ring_context {
     int                       bgid;
 };
 
-typedef enum { IO_OP_ACCEPT, IO_OP_READ, IO_OP_WRITE, IO_OP_SIGNAL } IoOp;
+typedef enum { IO_OP_ACCEPT, IO_OP_READ, IO_OP_WRITE, IO_OP_SIGNAL, IO_OP_OPUS_EVENT } IoOp;
 
 typedef struct {
     IoOp  op;
@@ -30,18 +30,21 @@ typedef struct {
     void *ctx;
 } IoRequest;
 
-typedef struct {
+typedef struct MachServer {
     struct io_uring          ring;
     int                      listen_fd;
     int                      signal_fd;
+    int                      opus_event_fd;
     IoRequest                accept_req;
     IoRequest                signal_req;
+    IoRequest                opus_event_req;
     char const              *socket_path;
     char const              *host;
     int                      port;
     bool                     is_tcp;
     uint32_t                 num_workers;
     bool                     running;
+    bool                     opus_mode;
     struct buf_ring_context *buf_ring;
 } MachServer;
 
@@ -75,6 +78,7 @@ struct MachSession {
     bool             recv_active;
     uint8_t          assemble_buf[32768];
     size_t           assemble_len;
+    void            *opus_queue; // Pointer to Opus job queue
 };
 
 /**
@@ -88,7 +92,9 @@ int mach_server_init(
     char const *const host,
     int const         port,
     uint32_t const    num_workers,
-    int const         sq_thread_cpu);
+    int const         sq_thread_cpu,
+    bool const        opus_mode,
+    uint32_t const    opus_threads);
 
 /**
  * Starts the io_uring event loop and listens for connections.

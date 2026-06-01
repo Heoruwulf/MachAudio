@@ -10,7 +10,8 @@ RUN apk add --no-cache \
     cmake \
     pkgconf \
     git \
-    liburing-dev
+    liburing-dev \
+    opus-dev
 
 # Set working directory
 WORKDIR /src
@@ -32,7 +33,8 @@ FROM alpine:3.22.4
 
 # Install runtime dependencies ONLY
 RUN apk add --no-cache \
-    liburing
+    liburing \
+    opus
 
 # Security best practice: Create a non-root user to run the daemon
 RUN addgroup -S machaudio && adduser -S machaudio -G machaudio

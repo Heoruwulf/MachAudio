@@ -12,6 +12,7 @@
 #define CODEC_PCMU 0
 #define CODEC_PCMA 8
 #define CODEC_L16  96
+#define CODEC_OPUS 111
 
 typedef enum {
     ENDIAN_NONE   = 0,
@@ -28,6 +29,8 @@ typedef struct {
     int64_t        pos_fp; // 32.32 fixed point
     int16_t        delay_buf[RESAMPLER_MAX_TAPS];
 } Resampler;
+
+#include <opus/opus.h>
 
 typedef struct {
     uint8_t  in_payload_type;
@@ -51,6 +54,9 @@ typedef struct {
     VadGruState *vad_state;
     bool         vad_enabled;
     float        last_vad_prob;
+
+    OpusEncoder *opus_enc;
+    OpusDecoder *opus_dec;
 } TranscodeSession;
 
 /**

@@ -63,6 +63,27 @@ int transcode_session_init(
         }
     }
 
+    int err = 0;
+    if (session->in_payload_type == CODEC_OPUS) {
+        session->opus_dec =
+            opus_decoder_create(session->in_sample_rate, session->in_channels, &err);
+        if (err != OPUS_OK || !session->opus_dec)
+            return -1;
+    }
+
+    if (session->out_payload_type == CODEC_OPUS) {
+        session->opus_enc = opus_encoder_create(
+            session->out_sample_rate,
+            session->out_channels,
+            OPUS_APPLICATION_VOIP,
+            &err);
+        if (err != OPUS_OK || !session->opus_enc) {
+            if (session->opus_dec)
+                opus_decoder_destroy(session->opus_dec);
+            return -1;
+        }
+    }
+
     return 0;
 }
 
@@ -70,6 +91,11 @@ void transcode_session_stop(TranscodeSession *const session) {
     if (unlikely(session == NULL)) {
         return;
     }
+
+    if (session->opus_enc)
+        opus_encoder_destroy(session->opus_enc);
+    if (session->opus_dec)
+        opus_decoder_destroy(session->opus_dec);
 
     memset(session, 0, sizeof(TranscodeSession));
 }
@@ -140,6 +166,14 @@ int audio_process_transcode(
             if (session->swap_in) {
                 swap_endian_l16(decode_buf, decode_samples * session->in_channels);
             }
+        } else if (session->in_payload_type == CODEC_OPUS) {
+            decode_buf = arena_alloc(out_arena, 5760 * session->in_channels * sizeof(int16_t));
+            if (!decode_buf)
+                return -1;
+            int ret = opus_decode(session->opus_dec, in_data, in_data_len, decode_buf, 5760, 0);
+            if (ret < 0)
+                return -1;
+            decode_samples = ret;
         } else {
             return -1;
         }
@@ -223,6 +257,15 @@ int audio_process_transcode(
         }
         memmove((uint8_t *)out_arena->buf + initial_curr, resampled_buf, out_len);
         out_arena->curr = initial_curr + out_len;
+    } else if (session->out_payload_type == CODEC_OPUS) {
+        uint8_t *opus_out = arena_alloc(out_arena, 4000);
+        if (!opus_out)
+            return -1;
+        int ret = opus_encode(session->opus_enc, resampled_buf, resampled_samples, opus_out, 4000);
+        if (ret < 0)
+            return -1;
+        memmove((uint8_t *)out_arena->buf + initial_curr, opus_out, ret);
+        out_arena->curr = initial_curr + ret;
     }
 
     return 0;

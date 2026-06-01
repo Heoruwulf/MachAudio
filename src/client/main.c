@@ -2,6 +2,7 @@
 #include <endian.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <opus/opus.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -46,6 +47,7 @@ typedef struct {
     uint32_t    duration_sec;
     bool        vad_enabled;
     uint32_t    ramp_up_sec;
+    bool        enable_opus;
 } ClientConfig;
 
 typedef struct {
@@ -67,15 +69,17 @@ typedef struct {
     size_t   read_buf_cap;
 
     // Statistics
-    uint64_t  total_sent;
-    uint64_t  total_received;
-    uint64_t  min_duration_ns;
-    uint64_t  max_duration_ns;
-    uint64_t  sum_duration_ns;
-    uint64_t  count_received;
-    uint64_t *latencies;
-    size_t    latencies_cap;
-    size_t    latencies_count;
+    uint64_t     total_sent;
+    uint64_t     total_received;
+    uint64_t     min_duration_ns;
+    uint64_t     max_duration_ns;
+    uint64_t     sum_duration_ns;
+    uint64_t     count_received;
+    uint64_t    *latencies;
+    size_t       latencies_cap;
+    size_t       latencies_count;
+    OpusDecoder *opus_dec;
+    OpusEncoder *opus_enc;
 } ClientConnection;
 
 typedef struct {
@@ -101,9 +105,23 @@ static char const *get_codec_extension(uint8_t format) {
         return "alaw";
     case 96:
         return "l16";
+    case 111:
+        return "l16"; // We decode Opus output to L16
 
     default:
         return "raw";
+    }
+}
+
+static inline bool is_host_little_endian(void) {
+    uint16_t const x = 0x01;
+    return *((uint8_t *)&x) == 1;
+}
+
+static void swap_endian_l16(int16_t *data, size_t samples) {
+    for (size_t i = 0; i < samples; ++i) {
+        uint16_t const val = (uint16_t)data[i];
+        data[i]            = (int16_t)((val << 8) | (val >> 8));
     }
 }
 
@@ -131,9 +149,9 @@ static void print_usage(char const *prog) {
     printf("  -p, --ptime <ms>          Packet time in ms (default: %d)\n", DEFAULT_PTIME_MS);
     printf("  -l, --loop                Loop the input file\n");
     printf("  -d, --duration <sec>      Total test duration when looping\n");
-    printf("  -U, --ramp-up <sec>       Stagger connection establishment over N seconds (default: "
-           "0)\n");
+    printf("  -U, --ramp-up <sec>       Stagger connection establishment over N seconds (default: 0)\n");
     printf("  -V, --vad                 Enable VAD processing\n");
+    printf("  -o, --enable-opus         Connect to Opus mode UDS socket\n");
     printf("  -h, --help                Show this help\n");
 }
 
@@ -160,6 +178,7 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
         {"duration", required_argument, 0, 'd'},
         {"vad", no_argument, 0, 'V'},
         {"ramp-up", required_argument, 0, 'U'},
+        {"enable-opus", no_argument, 0, 'o'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}};
 
@@ -179,13 +198,14 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
     config->ptime        = DEFAULT_PTIME_MS;
     config->vad_enabled  = false;
     config->ramp_up_sec  = 0;
+    config->enable_opus  = false;
 
     int opt;
     int option_index = 0;
     while ((opt = getopt_long(
                 argc,
                 argv,
-                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:hVU:",
+                "D:S:H:P:i:j:wf:r:c:e:F:R:C:E:n:p:ld:hVU:o",
                 long_options,
                 &option_index)) != -1)
     {
@@ -252,6 +272,9 @@ static void parse_args(int argc, char **argv, ClientConfig *const config) {
             break;
         case 'U':
             config->ramp_up_sec = (uint32_t)atoi(optarg);
+            break;
+        case 'o':
+            config->enable_opus = true;
             break;
         case 'h':
         default:
@@ -450,11 +473,32 @@ static void on_read(uv_stream_t *stream, ssize_t nread, uv_buf_t const *buf) {
                 }
 
                 if (conn->output_file) {
-                    fwrite(
-                        payload->data,
-                        1,
-                        header.payload_len - sizeof(struct audio_output_payload),
-                        conn->output_file);
+                    size_t output_len = header.payload_len - sizeof(struct audio_output_payload);
+                    if (g_app.config.out_format == 111) {
+                        int16_t decode_buf[5760 * 2];
+                        int     samples = opus_decode(
+                            conn->opus_dec,
+                            payload->data,
+                            output_len,
+                            decode_buf,
+                            5760,
+                            0);
+                        if (samples > 0) {
+                            bool const host_le = is_host_little_endian();
+                            if ((g_app.config.out_endian == 2 && host_le) ||
+                                (g_app.config.out_endian == 1 && !host_le))
+                            {
+                                swap_endian_l16(decode_buf, samples * g_app.config.out_channels);
+                            }
+                            fwrite(
+                                decode_buf,
+                                sizeof(int16_t) * g_app.config.out_channels,
+                                samples,
+                                conn->output_file);
+                        }
+                    } else {
+                        fwrite(payload->data, 1, output_len, conn->output_file);
+                    }
                 }
 
                 if (conn->output_vad_file) {
@@ -513,26 +557,38 @@ client_connect(uv_stream_t *stream, uv_connect_t *req, uv_connect_cb cb, uint32_
         uv_tcp_connect(req, (uv_tcp_t *)stream, (struct sockaddr const *)&addr, cb);
     } else {
         char socket_path[256];
-        snprintf(
-            socket_path,
-            sizeof(socket_path),
-            "%s/%s.%u.sock",
-            g_app.config.uds_dir,
-            g_app.config.uds_name,
-            worker_index);
+        if (g_app.config.enable_opus) {
+            snprintf(
+                socket_path,
+                sizeof(socket_path),
+                "%s/%s.opus.sock",
+                g_app.config.uds_dir,
+                g_app.config.uds_name);
+        } else {
+            snprintf(
+                socket_path,
+                sizeof(socket_path),
+                "%s/%s.%u.sock",
+                g_app.config.uds_dir,
+                g_app.config.uds_name,
+                worker_index);
+        }
         uv_pipe_connect(req, (uv_pipe_t *)stream, socket_path, cb);
     }
 }
 
 static void send_input_chunk(ClientConnection *const conn) {
-    size_t const samples_per_ms   = g_app.config.rate / 1000;
-    size_t const bytes_per_sample = (g_app.config.format == 96) ? 2 : 1;
-    size_t const chunk_size =
+    size_t const samples_per_ms = g_app.config.rate / 1000;
+    size_t const bytes_per_sample = (g_app.config.format == 96 || g_app.config.format == 111) ? 2 : 1;
+    size_t const pcm_chunk_size =
         samples_per_ms * g_app.config.ptime * bytes_per_sample * g_app.config.channels;
+    
+    size_t const alloc_chunk_size = (g_app.config.format == 111) ? 4000 : pcm_chunk_size;
+    size_t const padded_chunk_size = (alloc_chunk_size + 3) & ~3U;
 
     bool const has_input2 = (g_app.input_data_2 != NULL);
 
-    if (conn->offset + chunk_size > g_app.input_size) {
+    if (conn->offset + pcm_chunk_size > g_app.input_size) {
         if (g_app.config.loop) {
             conn->offset = 0;
         } else {
@@ -541,7 +597,7 @@ static void send_input_chunk(ClientConnection *const conn) {
         }
     }
 
-    if (has_input2 && conn->offset_2 + chunk_size > g_app.input_size_2) {
+    if (has_input2 && conn->offset_2 + pcm_chunk_size > g_app.input_size_2) {
         if (g_app.config.loop) {
             conn->offset_2 = 0;
         } else {
@@ -550,7 +606,6 @@ static void send_input_chunk(ClientConnection *const conn) {
         }
     }
 
-    size_t const   padded_chunk_size = (chunk_size + 3) & ~3U;
     uint32_t const num_buffers       = has_input2 ? 2 : 1;
     size_t const   payload_len =
         sizeof(struct audio_input_payload) +
@@ -572,31 +627,76 @@ static void send_input_chunk(ClientConnection *const conn) {
     uint8_t *ptr = buf + sizeof(AudioMsgHeader) + sizeof(struct audio_input_payload);
 
     // Buffer 1
-    struct audio_buffer_header *bh1 = (struct audio_buffer_header *)ptr;
-    bh1->length                     = htonl((uint32_t)chunk_size);
-    uint32_t vol_bits_net           = protocol_float_to_net(1.0f);
+    struct audio_buffer_header *bh1          = (struct audio_buffer_header *)ptr;
+    uint32_t                    vol_bits_net = protocol_float_to_net(1.0f);
     memcpy(&bh1->volume, &vol_bits_net, 4);
     ptr += sizeof(struct audio_buffer_header);
-    memcpy(ptr, g_app.input_data + conn->offset, chunk_size);
-    ptr += padded_chunk_size;
 
-    conn->offset += chunk_size;
-    conn->total_sent += chunk_size;
+    if (g_app.config.format == 111) {
+        size_t const num_samples = samples_per_ms * g_app.config.ptime * g_app.config.channels;
+        int16_t pcm_buf[5760 * 2];
+        memcpy(pcm_buf, g_app.input_data + conn->offset, num_samples * sizeof(int16_t));
+
+        bool const host_le = is_host_little_endian();
+        if ((g_app.config.in_endian == 2 && host_le) || (g_app.config.in_endian == 1 && !host_le)) {
+            swap_endian_l16(pcm_buf, num_samples);
+        }
+
+        int opus_len = opus_encode(
+            conn->opus_enc,
+            pcm_buf,
+            samples_per_ms * g_app.config.ptime,
+            ptr,
+            padded_chunk_size);
+        if (opus_len > 0) {
+            bh1->length = htonl((uint32_t)opus_len);
+            ptr += ((opus_len + 3) & ~3U); // Pad to 4 bytes
+        } else {
+            bh1->length = 0;
+        }
+    } else {
+        bh1->length = htonl((uint32_t)pcm_chunk_size);
+        memcpy(ptr, g_app.input_data + conn->offset, pcm_chunk_size);
+        ptr += padded_chunk_size;
+    }
+
+    conn->offset += pcm_chunk_size;
+    conn->total_sent += pcm_chunk_size;
 
     // Buffer 2
     if (has_input2) {
         struct audio_buffer_header *bh2 = (struct audio_buffer_header *)ptr;
-        bh2->length                     = htonl((uint32_t)chunk_size);
         memcpy(&bh2->volume, &vol_bits_net, 4);
         ptr += sizeof(struct audio_buffer_header);
-        memcpy(ptr, g_app.input_data_2 + conn->offset_2, chunk_size);
-        ptr += padded_chunk_size;
 
-        conn->offset_2 += chunk_size;
-        conn->total_sent += chunk_size;
+        if (g_app.config.format == 111) {
+            int opus_len = opus_encode(
+                conn->opus_enc,
+                (int16_t *)(g_app.input_data_2 + conn->offset_2),
+                samples_per_ms * g_app.config.ptime,
+                ptr,
+                padded_chunk_size);
+            if (opus_len > 0) {
+                bh2->length = htonl((uint32_t)opus_len);
+                ptr += ((opus_len + 3) & ~3U);
+            } else {
+                bh2->length = 0;
+            }
+        } else {
+            bh2->length = htonl((uint32_t)pcm_chunk_size);
+            memcpy(ptr, g_app.input_data_2 + conn->offset_2, pcm_chunk_size);
+            ptr += padded_chunk_size;
+        }
+
+        conn->offset_2 += pcm_chunk_size;
+        conn->total_sent += pcm_chunk_size;
     }
 
-    uv_buf_t            uv_buf = uv_buf_init((char *)buf, (unsigned int)total_len);
+    size_t actual_payload_len = (size_t)(ptr - buf - sizeof(AudioMsgHeader));
+    header->payload_len       = htonl((uint32_t)actual_payload_len);
+    size_t actual_total_len   = ptr - buf;
+
+    uv_buf_t            uv_buf = uv_buf_init((char *)buf, (unsigned int)actual_total_len);
     WriteRequest *const wr     = malloc(sizeof(WriteRequest));
     wr->buf                    = buf;
     uv_write(&wr->req, (uv_stream_t *)&conn->handle.stream, &uv_buf, 1, on_write_completed);
@@ -806,6 +906,19 @@ int main(int argc, char **argv) {
         client_init(g_app.loop, &conn->handle.stream);
         uv_timer_init(g_app.loop, &conn->timer);
 
+        if (g_app.config.out_format == 111) {
+            int err;
+            conn->opus_dec = opus_decoder_create(g_app.config.out_rate, g_app.config.out_channels, &err);
+        }
+        if (g_app.config.format == 111) {
+            int err;
+            conn->opus_enc = opus_encoder_create(
+                g_app.config.rate,
+                g_app.config.channels,
+                OPUS_APPLICATION_VOIP,
+                &err);
+        }
+
         if (g_app.config.write_output) {
             char conn_dir[256];
             snprintf(conn_dir, sizeof(conn_dir), "%s/%04u", timestamp_str, i);
@@ -996,6 +1109,11 @@ int main(int argc, char **argv) {
         if (conn->output_vad_file) {
             fclose(conn->output_vad_file);
         }
+
+        if (conn->opus_dec)
+            opus_decoder_destroy(conn->opus_dec);
+        if (conn->opus_enc)
+            opus_encoder_destroy(conn->opus_enc);
 
         free(conn->latencies);
     }
