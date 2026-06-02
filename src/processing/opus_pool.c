@@ -8,8 +8,15 @@
 #include "machaudio/log.h"
 #include "machaudio/server.h"
 
+// The maximum number of concurrent audio sessions that the thread pool can process.
 #define MAX_ACTIVE_SESSIONS      4096
+
+// The maximum number of pending tasks per session queue. Since jobs are grouped by session,
+// this limits the backlog size for an individual session.
 #define SESSION_QUEUE_CAPACITY   64
+
+// The maximum number of processed jobs waiting to be sent back via io_uring globally.
+// 4096 is chosen to comfortably accommodate peaks across all active sessions.
 #define COMPLETED_QUEUE_CAPACITY 4096
 
 typedef struct {
@@ -53,7 +60,7 @@ static void *worker_thread_main(void *arg) {
         LOGERR("Failed to allocate worker arena buffer");
         return NULL;
     }
-    
+
     Arena t_arena;
     arena_init(&t_arena, t_arena_buf, MACH_SESSION_ARENA_SIZE, "opus_arena");
 
@@ -78,11 +85,15 @@ static void *worker_thread_main(void *arg) {
 
                 pthread_mutex_lock(&sq->lock);
                 if (sq->count > 0 && !sq->is_processing) {
-                    job      = sq->jobs[sq->head];
+                    OpusJob *src = &sq->jobs[sq->head];
+                    job          = *src;
+                    if (src->payload == src->inline_payload) {
+                        job.payload = job.inline_payload;
+                    }
                     sq->head = (sq->head + 1) % SESSION_QUEUE_CAPACITY;
                     sq->count--;
                     sq->is_processing = true;
-                    found_job = true;
+                    found_job         = true;
                 }
                 pthread_mutex_unlock(&sq->lock);
 
@@ -108,7 +119,7 @@ static void *worker_thread_main(void *arg) {
         if (found_job) {
             // Process the job
             uint64_t start_ns = mach_hrtime();
-            
+
             arena_reset(&t_arena);
 
             struct audio_input_payload *payload = job.payload;
@@ -121,30 +132,49 @@ static void *worker_thread_main(void *arg) {
 
             uint64_t end_ns = mach_hrtime();
 
-            size_t out_len  = arena_used(&t_arena);
-            void  *out_data = NULL;
+            size_t           out_len  = arena_used(&t_arena);
+            void            *out_data = NULL;
+            OpusCompletedJob cjob     = {
+                    .session     = job.session,
+                    .sequence_id = job.sequence_id,
+                    .error_code  = r,
+                    .out_len     = out_len,
+                    .duration_ns = end_ns - start_ns};
+
             if (r == 0 && out_len > 0) {
-                out_data = malloc(out_len);
-                if (out_data) {
-                    memcpy(out_data, t_arena.buf, out_len);
+                if (out_len <= OPUS_MAX_INLINE_PAYLOAD) {
+                    memcpy(cjob.inline_out_data, t_arena.buf, out_len);
+                    cjob.out_data = cjob.inline_out_data;
                 } else {
-                    r = -1;
+                    LOGDBG(
+                        "Opus completed payload exceeds inline buffer, malloc fallback used (size: "
+                        "%zu)",
+                        out_len);
+                    out_data = malloc(out_len);
+                    if (out_data) {
+                        memcpy(out_data, t_arena.buf, out_len);
+                        cjob.out_data = out_data;
+                    } else {
+                        cjob.error_code = -1;
+                        cjob.out_data   = NULL;
+                    }
                 }
+            } else {
+                cjob.out_data = NULL;
             }
 
-            OpusCompletedJob cjob = {
-                .session     = job.session,
-                .sequence_id = job.sequence_id,
-                .error_code  = r,
-                .out_data    = out_data,
-                .out_len     = out_len,
-                .duration_ns = end_ns - start_ns};
-
-            free(job.payload);
+            if (job.payload && job.payload != job.inline_payload) {
+                free(job.payload);
+            }
 
             pthread_mutex_lock(&pool.completed_queue.lock);
             if (pool.completed_queue.count < COMPLETED_QUEUE_CAPACITY) {
-                pool.completed_queue.jobs[pool.completed_queue.tail] = cjob;
+                OpusCompletedJob *pcjob = &pool.completed_queue.jobs[pool.completed_queue.tail];
+                *pcjob                  = cjob;
+                if (cjob.out_data == cjob.inline_out_data) {
+                    pcjob->out_data = pcjob->inline_out_data;
+                }
+
                 pool.completed_queue.tail =
                     (pool.completed_queue.tail + 1) % COMPLETED_QUEUE_CAPACITY;
                 pool.completed_queue.count++;
@@ -155,15 +185,17 @@ static void *worker_thread_main(void *arg) {
                 (void)s;
             } else {
                 LOGERR("Opus completed queue is full! Dropping response.");
-                free(cjob.out_data);
+                if (cjob.out_data && cjob.out_data != cjob.inline_out_data) {
+                    free(cjob.out_data);
+                }
             }
             pthread_mutex_unlock(&pool.completed_queue.lock);
 
             // Release session processing lock
             SessionQueue *sq = (SessionQueue *)job.session->opus_queue;
             pthread_mutex_lock(&sq->lock);
-            sq->is_processing = false;
-            bool has_more = (sq->count > 0);
+            sq->is_processing   = false;
+            bool const has_more = (sq->count > 0);
             pthread_mutex_unlock(&sq->lock);
 
             if (has_more) {
@@ -247,7 +279,7 @@ void opus_pool_unregister_session(MachSession *session) {
 
     if (session->opus_queue) {
         SessionQueue *sq = (SessionQueue *)session->opus_queue;
-        
+
         // Wait until any active worker thread finishes processing this session
         while (1) {
             pthread_mutex_lock(&sq->lock);
@@ -257,11 +289,13 @@ void opus_pool_unregister_session(MachSession *session) {
             pthread_mutex_unlock(&sq->lock);
             usleep(100);
         }
-        
+
         // Free remaining payloads
         for (int i = 0; i < sq->count; i++) {
             int idx = (sq->head + i) % SESSION_QUEUE_CAPACITY;
-            free(sq->jobs[idx].payload);
+            if (sq->jobs[idx].payload && sq->jobs[idx].payload != sq->jobs[idx].inline_payload) {
+                free(sq->jobs[idx].payload);
+            }
         }
         pthread_mutex_unlock(&sq->lock);
         pthread_mutex_destroy(&sq->lock);
@@ -282,10 +316,15 @@ int opus_pool_enqueue_job(
 
     void *payload_copy = NULL;
     if (payload && payload_len > 0) {
-        payload_copy = malloc(payload_len);
-        if (!payload_copy)
-            return -1;
-        memcpy(payload_copy, payload, payload_len);
+        if (payload_len > OPUS_MAX_INLINE_PAYLOAD) {
+            LOGDBG(
+                "Opus payload exceeds inline buffer, malloc fallback used (size: %zu)",
+                payload_len);
+            payload_copy = malloc(payload_len);
+            if (!payload_copy)
+                return -1;
+            memcpy(payload_copy, payload, payload_len);
+        }
     }
 
     pthread_mutex_lock(&sq->lock);
@@ -300,8 +339,18 @@ int opus_pool_enqueue_job(
     job->session     = session;
     job->sequence_id = sequence_id;
     job->command     = command;
-    job->payload     = payload_copy;
     job->payload_len = payload_len;
+
+    if (payload && payload_len > 0) {
+        if (payload_len <= OPUS_MAX_INLINE_PAYLOAD) {
+            memcpy(job->inline_payload, payload, payload_len);
+            job->payload = job->inline_payload;
+        } else {
+            job->payload = payload_copy;
+        }
+    } else {
+        job->payload = NULL;
+    }
 
     sq->tail = (sq->tail + 1) % SESSION_QUEUE_CAPACITY;
     sq->count++;
@@ -318,7 +367,11 @@ bool opus_pool_dequeue_completed(OpusCompletedJob *job) {
     bool found = false;
     pthread_mutex_lock(&pool.completed_queue.lock);
     if (pool.completed_queue.count > 0) {
-        *job                      = pool.completed_queue.jobs[pool.completed_queue.head];
+        OpusCompletedJob *src = &pool.completed_queue.jobs[pool.completed_queue.head];
+        *job                  = *src;
+        if (src->out_data == src->inline_out_data) {
+            job->out_data = job->inline_out_data;
+        }
         pool.completed_queue.head = (pool.completed_queue.head + 1) % COMPLETED_QUEUE_CAPACITY;
         pool.completed_queue.count--;
         found = true;
@@ -328,8 +381,8 @@ bool opus_pool_dequeue_completed(OpusCompletedJob *job) {
 }
 
 void opus_pool_free_completed_job(OpusCompletedJob *job) {
-    if (job->out_data) {
+    if (job->out_data && job->out_data != job->inline_out_data) {
         free(job->out_data);
-        job->out_data = NULL;
     }
+    job->out_data = NULL;
 }

@@ -7,13 +7,13 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 # Security and Quality Flags
 set(COMMON_FLAGS "-Wall -Wextra -Wpedantic -Werror -fstack-protector-strong -mavx2 -mfma")
-add_definitions(-D_GNU_SOURCE -DDEBUGLOGS)
+add_definitions(-D_GNU_SOURCE -DLOG_DEBUG)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_FLAGS}")
 
 option(BUILD_FUZZERS "Build libFuzzer targets (requires Clang)" OFF)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -g -DDEBUG")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,undefined -g")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,undefined")
 endif()
 

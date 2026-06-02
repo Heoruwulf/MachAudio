@@ -149,7 +149,8 @@ static void print_usage(char const *prog) {
     printf("  -p, --ptime <ms>          Packet time in ms (default: %d)\n", DEFAULT_PTIME_MS);
     printf("  -l, --loop                Loop the input file\n");
     printf("  -d, --duration <sec>      Total test duration when looping\n");
-    printf("  -U, --ramp-up <sec>       Stagger connection establishment over N seconds (default: 0)\n");
+    printf("  -U, --ramp-up <sec>       Stagger connection establishment over N seconds (default: "
+           "0)\n");
     printf("  -V, --vad                 Enable VAD processing\n");
     printf("  -o, --enable-opus         Connect to Opus mode UDS socket\n");
     printf("  -h, --help                Show this help\n");
@@ -579,11 +580,12 @@ client_connect(uv_stream_t *stream, uv_connect_t *req, uv_connect_cb cb, uint32_
 
 static void send_input_chunk(ClientConnection *const conn) {
     size_t const samples_per_ms = g_app.config.rate / 1000;
-    size_t const bytes_per_sample = (g_app.config.format == 96 || g_app.config.format == 111) ? 2 : 1;
+    size_t const bytes_per_sample =
+        (g_app.config.format == 96 || g_app.config.format == 111) ? 2 : 1;
     size_t const pcm_chunk_size =
         samples_per_ms * g_app.config.ptime * bytes_per_sample * g_app.config.channels;
-    
-    size_t const alloc_chunk_size = (g_app.config.format == 111) ? 4000 : pcm_chunk_size;
+
+    size_t const alloc_chunk_size  = (g_app.config.format == 111) ? 4000 : pcm_chunk_size;
     size_t const padded_chunk_size = (alloc_chunk_size + 3) & ~3U;
 
     bool const has_input2 = (g_app.input_data_2 != NULL);
@@ -606,7 +608,7 @@ static void send_input_chunk(ClientConnection *const conn) {
         }
     }
 
-    uint32_t const num_buffers       = has_input2 ? 2 : 1;
+    uint32_t const num_buffers = has_input2 ? 2 : 1;
     size_t const   payload_len =
         sizeof(struct audio_input_payload) +
         num_buffers * (sizeof(struct audio_buffer_header) + padded_chunk_size);
@@ -634,7 +636,7 @@ static void send_input_chunk(ClientConnection *const conn) {
 
     if (g_app.config.format == 111) {
         size_t const num_samples = samples_per_ms * g_app.config.ptime * g_app.config.channels;
-        int16_t pcm_buf[5760 * 2];
+        int16_t      pcm_buf[5760 * 2];
         memcpy(pcm_buf, g_app.input_data + conn->offset, num_samples * sizeof(int16_t));
 
         bool const host_le = is_host_little_endian();
@@ -908,7 +910,8 @@ int main(int argc, char **argv) {
 
         if (g_app.config.out_format == 111) {
             int err;
-            conn->opus_dec = opus_decoder_create(g_app.config.out_rate, g_app.config.out_channels, &err);
+            conn->opus_dec =
+                opus_decoder_create(g_app.config.out_rate, g_app.config.out_channels, &err);
         }
         if (g_app.config.format == 111) {
             int err;

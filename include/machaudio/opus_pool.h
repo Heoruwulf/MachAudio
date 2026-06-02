@@ -9,12 +9,15 @@ typedef struct MachSession MachSession;
 typedef struct MachServer  MachServer;
 
 // Represents an Opus transcode job
+#define OPUS_MAX_INLINE_PAYLOAD 4096
+
 typedef struct {
     MachSession *session;
     uint32_t     sequence_id;
     uint32_t     command;
     void        *payload;
     size_t       payload_len;
+    uint8_t      inline_payload[OPUS_MAX_INLINE_PAYLOAD];
 } OpusJob;
 
 // Initialize the global Opus thread pool
@@ -46,6 +49,7 @@ typedef struct {
     void        *out_data;
     size_t       out_len;
     uint64_t     duration_ns;
+    uint8_t      inline_out_data[OPUS_MAX_INLINE_PAYLOAD];
 } OpusCompletedJob;
 
 // Dequeue a completed job from the MPSC completion queue. Returns true if a job was dequeued.
