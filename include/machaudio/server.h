@@ -50,7 +50,7 @@ typedef struct MachServer {
 
 typedef struct MachSession MachSession;
 
-#define MAX_CONCURRENT_WRITES 32
+#define MAX_CONCURRENT_WRITES 128
 #define MAX_WRITE_PAYLOAD     8192
 
 typedef struct {

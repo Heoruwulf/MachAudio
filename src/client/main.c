@@ -923,13 +923,13 @@ int main(int argc, char **argv) {
         }
 
         if (g_app.config.write_output) {
-            char conn_dir[256];
+            char conn_dir[512];
             snprintf(conn_dir, sizeof(conn_dir), "%s/%04u", timestamp_str, i);
             if (mkdir(conn_dir, 0755) != 0) {
                 // Ignore EEXIST errors
             }
 
-            char filename[512];
+            char filename[1024];
             snprintf(
                 filename,
                 sizeof(filename),

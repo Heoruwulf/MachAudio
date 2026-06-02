@@ -452,7 +452,16 @@ int main(int argc, char **argv) {
         int   status;
         pid_t pid = wait(&status);
         if (pid > 0) {
-            LOGINF("Worker process %d exited", pid);
+            if (WIFEXITED(status)) {
+                LOGINF(
+                    "Worker process %d exited normally with status %d",
+                    pid,
+                    WEXITSTATUS(status));
+            } else if (WIFSIGNALED(status)) {
+                LOGINF("Worker process %d killed by signal %d", pid, WTERMSIG(status));
+            } else {
+                LOGINF("Worker process %d exited (status %d)", pid, status);
+            }
             active_workers--;
         }
     }

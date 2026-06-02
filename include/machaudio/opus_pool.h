@@ -53,7 +53,10 @@ typedef struct {
 } OpusCompletedJob;
 
 // Dequeue a completed job from the MPSC completion queue. Returns true if a job was dequeued.
-bool opus_pool_dequeue_completed(OpusCompletedJob *job);
+OpusCompletedJob *opus_pool_dequeue_completed(void);
+
+// Dequeue a batch of completed jobs
+int opus_pool_dequeue_completed_batch(OpusCompletedJob **jobs, int max_jobs);
 
 // Free the output data buffer of a completed job
 void opus_pool_free_completed_job(OpusCompletedJob *job);

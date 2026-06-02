@@ -32,7 +32,9 @@ void arena_init_impl(
     }
     arena->curr = 0;
 
+#ifdef LOG_ARENA
     LOGINF_LOC(file, line, "Initialized arena '%s' with size %zu bytes", arena->name, arena->size);
+#endif
 }
 
 void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, int line) {
@@ -61,6 +63,7 @@ void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, 
     void *const ptr = &arena->buf[aligned_curr];
     arena->curr     = aligned_curr + size;
 
+#ifdef LOG_ARENA
     LOGDBG_LOC(
         file,
         line,
@@ -69,6 +72,7 @@ void *arena_alloc_impl(Arena *const arena, size_t const size, char const *file, 
         size,
         arena->curr,
         arena->size);
+#endif
 
     return ptr;
 }
@@ -78,7 +82,9 @@ void arena_reset_impl(Arena *const arena, char const *file, int line) {
     (void)line;
     if (arena != NULL) {
         arena->curr = 0;
+#ifdef LOG_ARENA
         LOGDBG_LOC(file, line, "Arena '%s' reset, used 0/%zu bytes", arena->name, arena->size);
+#endif
     }
 }
 
@@ -88,6 +94,8 @@ size_t arena_used_impl(Arena const *const arena, char const *file, int line) {
     if (arena == NULL) {
         return 0;
     }
+#ifdef LOG_ARENA
     LOGDBG_LOC(file, line, "Arena '%s' used %zu/%zu bytes", arena->name, arena->curr, arena->size);
+#endif
     return arena->curr;
 }

@@ -708,66 +708,76 @@ int mach_server_start(MachServer *const server) {
                 if (res < 0) {
                     LOGERR("Opus eventfd read error: %s", strerror(-res));
                 } else {
-                    OpusCompletedJob cjob;
-                    while (opus_pool_dequeue_completed(&cjob)) {
-                        if (cjob.session->closing) {
-                            opus_pool_free_completed_job(&cjob);
-                            continue;
-                        }
+                    OpusCompletedJob *jobs[256];
+                    int               num_jobs;
+                    while ((num_jobs = opus_pool_dequeue_completed_batch(jobs, 256)) > 0) {
+                        for (int i = 0; i < num_jobs; i++) {
+                            OpusCompletedJob *cjob = jobs[i];
+                            if (cjob->session->closing) {
+                                opus_pool_free_completed_job(cjob);
+                                continue;
+                            }
 
-                        if (cjob.error_code != 0) {
-                            send_error_uring(cjob.session, cjob.sequence_id, ERR_PROCESSING_FAILED);
-                        } else {
-                            size_t const payload_len =
-                                sizeof(struct audio_output_payload) + cjob.out_len;
-                            size_t const resp_len = sizeof(AudioMsgHeader) + payload_len;
+                            if (cjob->error_code != 0) {
+                                send_error_uring(
+                                    cjob->session,
+                                    cjob->sequence_id,
+                                    ERR_PROCESSING_FAILED);
+                            } else {
+                                size_t const payload_len =
+                                    sizeof(struct audio_output_payload) + cjob->out_len;
+                                size_t const resp_len = sizeof(AudioMsgHeader) + payload_len;
 
-                            WriteResponse *wr = get_write_response(cjob.session, resp_len);
-                            if (wr) {
-                                wr->req.op  = IO_OP_WRITE;
-                                wr->req.fd  = cjob.session->client_fd;
-                                wr->req.ctx = wr;
-                                wr->session = cjob.session;
-                                wr->len     = resp_len;
+                                WriteResponse *wr = get_write_response(cjob->session, resp_len);
+                                if (wr) {
+                                    wr->req.op  = IO_OP_WRITE;
+                                    wr->req.fd  = cjob->session->client_fd;
+                                    wr->req.ctx = wr;
+                                    wr->session = cjob->session;
+                                    wr->len     = resp_len;
 
-                                AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
-                                resp_header->magic                = htonl(AUDIO_MAGIC);
-                                resp_header->version              = htons(AUDIO_VERSION);
-                                resp_header->command              = htons(CMD_OUTPUT);
-                                resp_header->sequence_id          = htonl(cjob.sequence_id);
-                                resp_header->payload_len          = htonl((uint32_t)payload_len);
+                                    AudioMsgHeader *const resp_header = (AudioMsgHeader *)wr->data;
+                                    resp_header->magic                = htonl(AUDIO_MAGIC);
+                                    resp_header->version              = htons(AUDIO_VERSION);
+                                    resp_header->command              = htons(CMD_OUTPUT);
+                                    resp_header->sequence_id          = htonl(cjob->sequence_id);
+                                    resp_header->payload_len = htonl((uint32_t)payload_len);
 
-                                struct audio_output_payload *const resp_payload =
-                                    (struct audio_output_payload *)(wr->data +
-                                                                    sizeof(AudioMsgHeader));
-                                resp_payload->duration_ns = htobe64(cjob.duration_ns);
+                                    struct audio_output_payload *const resp_payload =
+                                        (struct audio_output_payload *)(wr->data +
+                                                                        sizeof(AudioMsgHeader));
+                                    resp_payload->duration_ns = htobe64(cjob->duration_ns);
 
-                                uint32_t const prob_net = protocol_float_to_net(
-                                    cjob.session->transcode_session.last_vad_prob);
-                                memcpy(&resp_payload->vad_prob, &prob_net, sizeof(float));
+                                    uint32_t const prob_net = protocol_float_to_net(
+                                        cjob->session->transcode_session.last_vad_prob);
+                                    memcpy(&resp_payload->vad_prob, &prob_net, sizeof(float));
 
-                                memset(resp_payload->reserved, 0, sizeof(resp_payload->reserved));
-                                if (cjob.out_data) {
-                                    memcpy(resp_payload->data, cjob.out_data, cjob.out_len);
-                                }
+                                    memset(
+                                        resp_payload->reserved,
+                                        0,
+                                        sizeof(resp_payload->reserved));
+                                    if (cjob->out_data) {
+                                        memcpy(resp_payload->data, cjob->out_data, cjob->out_len);
+                                    }
 
-                                struct io_uring_sqe *sqe = safe_get_sqe(&server->ring);
-                                if (sqe) {
-                                    io_uring_prep_send(
-                                        sqe,
-                                        cjob.session->client_fd,
-                                        wr->data,
-                                        resp_len,
-                                        0);
-                                    io_uring_sqe_set_data(sqe, &wr->req);
-                                    cjob.session->pending_writes++;
-                                    io_uring_submit(&server->ring);
-                                } else {
-                                    free_write_response(wr);
+                                    struct io_uring_sqe *sqe = safe_get_sqe(&server->ring);
+                                    if (sqe) {
+                                        io_uring_prep_send(
+                                            sqe,
+                                            cjob->session->client_fd,
+                                            wr->data,
+                                            resp_len,
+                                            0);
+                                        io_uring_sqe_set_data(sqe, &wr->req);
+                                        cjob->session->pending_writes++;
+                                    } else {
+                                        free_write_response(wr);
+                                    }
                                 }
                             }
+                            opus_pool_free_completed_job(cjob);
                         }
-                        opus_pool_free_completed_job(&cjob);
+                        io_uring_submit(&server->ring);
                     }
                 }
 
